@@ -65,6 +65,7 @@ use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::zwlr_scre
 use smithay::reexports::wayland_server::backend::{
     ClientData, ClientId, DisconnectReason, GlobalId,
 };
+use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
@@ -102,6 +103,7 @@ use smithay::wayland::shell::kde::decoration::KdeDecorationState;
 use smithay::wayland::shell::wlr_layer::{self, Layer, WlrLayerShellState};
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::shell::xdg::XdgShellState;
+use smithay::wayland::shm;
 use smithay::wayland::shm::ShmState;
 #[cfg(test)]
 use smithay::wayland::single_pixel_buffer::SinglePixelBufferState;
@@ -162,8 +164,8 @@ use crate::render_helpers::surface::push_elements_from_surface_tree;
 use crate::render_helpers::texture::TextureBuffer;
 use crate::render_helpers::xray::{Xray, XrayPos};
 use crate::render_helpers::{
-    encompassing_geo, render_to_dmabuf, render_to_encompassing_texture, render_to_shm,
-    render_to_texture, render_to_vec, shaders, RenderCtx, RenderTarget,
+    clear_dmabuf_with_color, encompassing_geo, render_to_dmabuf, render_to_encompassing_texture,
+    render_to_shm, render_to_texture, render_to_vec, shaders, RenderCtx, RenderTarget,
 };
 #[cfg(feature = "xdp-gnome-screencast")]
 use crate::screencasting::Screencasting;
@@ -187,6 +189,7 @@ use crate::window::mapped::MappedId;
 use crate::window::{InitialConfigureState, Mapped, ResolvedWindowRules, Unmapped, WindowRef};
 
 const CLEAR_COLOR_LOCKED: [f32; 4] = [0.3, 0.1, 0.1, 1.];
+const SCREENCOPY_POWERED_OFF_COLOR: Color32F = Color32F::new(0., 0., 0., 1.);
 
 // We'll try to send frame callbacks at least once a second. We'll make a timer that fires once a
 // second, so with the worst timing the maximum interval between two frame callbacks for a surface
@@ -3093,6 +3096,25 @@ impl Niri {
 
         self.monitors_active = false;
         backend.set_monitors_active(false);
+
+        let outputs: Vec<_> = self.global_space.outputs().cloned().collect();
+        let mut screencopies = Vec::new();
+        for output in outputs {
+            screencopies.extend(self.screencopy_state.drain_output(&output));
+        }
+
+        if !screencopies.is_empty() {
+            // Keep screencopy clients alive while DPMS is off. Sunshine crashes on failed frames;
+            // black frames avoid exposing real content and release client dmabufs promptly.
+            let _ = backend.with_primary_renderer(|renderer| {
+                for screencopy in screencopies {
+                    if let Err(err) = self.submit_powered_off_screencopy(renderer, screencopy) {
+                        warn!("error submitting powered-off screencopy: {err:?}");
+                    }
+                }
+            });
+            self.screencopy_state.reset_damage_trackers();
+        }
     }
 
     pub fn activate_monitors(&mut self, backend: &mut Backend) {
@@ -4739,6 +4761,10 @@ impl Niri {
             lock_state => self.lock_state = lock_state,
         }
 
+        if !self.monitors_active {
+            return;
+        }
+
         self.refresh_on_demand_vrr(backend, output);
 
         // Send the frame callbacks.
@@ -5471,6 +5497,18 @@ impl Niri {
         self.screencopy_state = screencopy_state;
     }
 
+    pub fn submit_powered_off_screencopy(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        screencopy: Screencopy,
+    ) -> anyhow::Result<()> {
+        screencopy.damage_whole_buffer();
+        let sync = Self::clear_screencopy_buffer(renderer, &screencopy)
+            .context("error clearing powered-off screencopy buffer")?;
+        screencopy.submit_after_sync(false, sync, &self.event_loop);
+        Ok(())
+    }
+
     pub fn render_for_screencopy_without_damage(
         &mut self,
         renderer: &mut GlesRenderer,
@@ -5551,6 +5589,47 @@ impl Niri {
 
         // Just checked damage tracker has static mode
         damage_tracker.damage_output(1, elements).unwrap()
+    }
+
+    fn clear_screencopy_buffer(
+        renderer: &mut GlesRenderer,
+        screencopy: &Screencopy,
+    ) -> anyhow::Result<Option<SyncPoint>> {
+        match screencopy.buffer().clone() {
+            ScreencopyBuffer::Dmabuf(dmabuf) => {
+                let sync = clear_dmabuf_with_color(renderer, dmabuf, SCREENCOPY_POWERED_OFF_COLOR)
+                    .context("error clearing screencopy dmabuf")?;
+                Ok(Some(sync))
+            }
+            ScreencopyBuffer::Shm(wl_buffer) => {
+                Self::clear_screencopy_shm_buffer(&wl_buffer, screencopy.buffer_size())
+                    .context("error clearing screencopy shm buffer")?;
+                Ok(None)
+            }
+        }
+    }
+
+    fn clear_screencopy_shm_buffer(
+        buffer: &WlBuffer,
+        size: Size<i32, Physical>,
+    ) -> anyhow::Result<()> {
+        shm::with_buffer_contents_mut(buffer, |shm_buffer, shm_len, buffer_data| {
+            ensure!(
+                buffer_data.format == wl_shm::Format::Xrgb8888
+                    && buffer_data.width == size.w
+                    && buffer_data.height == size.h
+                    && buffer_data.stride == size.w * 4
+                    && shm_len == buffer_data.stride as usize * buffer_data.height as usize,
+                "invalid buffer format or size"
+            );
+
+            let pixels =
+                unsafe { std::slice::from_raw_parts_mut(shm_buffer.cast::<u32>(), shm_len / 4) };
+            pixels.fill(0xFF000000);
+
+            Ok(())
+        })
+        .context("expected shm buffer, but didn't get one")?
     }
 
     #[allow(clippy::type_complexity)]

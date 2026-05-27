@@ -125,18 +125,21 @@ impl ScreencopyQueue {
             error!("only screencopy with damage can be pushed in the queue");
         }
 
+        self.touch_cast(screencopy.output());
+        self.screencopies.push(screencopy);
+    }
+
+    fn touch_cast(&mut self, output: &Output) {
         if let Some(cast) = &mut self.cast {
             // Update cast output when pushing a new front screencopy.
             if self.screencopies.is_empty() {
-                cast.update_output(screencopy.output());
+                cast.update_output(output);
             }
+            cast.update_deadline();
         } else {
             // First with_damage request, mark this as a screencast.
-            let output = screencopy.output();
             self.cast = Some(ScreencopyCast::new(output));
         }
-
-        self.screencopies.push(screencopy);
     }
 
     pub fn pop(&mut self) -> Screencopy {
@@ -164,19 +167,35 @@ impl ScreencopyQueue {
     }
 
     fn remove_output(&mut self, output: &Output) {
+        let _ = self.drain_output(output);
+    }
+
+    fn drain_output(&mut self, output: &Output) -> Vec<Screencopy> {
         if self.screencopies.is_empty() {
-            return;
+            return Vec::new();
         }
 
-        self.screencopies
-            .retain(|screencopy| screencopy.output() != output);
+        let mut drained = Vec::new();
+        let mut remaining = Vec::new();
+        for screencopy in self.screencopies.drain(..) {
+            if screencopy.output() == output {
+                drained.push(screencopy);
+            } else {
+                remaining.push(screencopy);
+            }
+        }
+        self.screencopies = remaining;
 
         if let Some(cast) = &mut self.cast {
-            if self.screencopies.is_empty() {
+            if let Some(first) = self.screencopies.first() {
+                cast.update_output(first.output());
+            } else {
                 // Queue became empty, update deadline for considering the cast stopped.
                 cast.update_deadline();
             }
         }
+
+        drained
     }
 
     fn remove_frame(&mut self, frame: &ZwlrScreencopyFrameV1) {
@@ -238,6 +257,15 @@ impl ScreencopyManagerState {
         queue.push(screencopy);
     }
 
+    pub fn touch_cast(&mut self, manager: &ZwlrScreencopyManagerV1, output: &Output) {
+        let Some(queue) = self.queues.get_mut(manager) else {
+            error!("screencopy queue must not be deleted as long as frames exist");
+            return;
+        };
+
+        queue.touch_cast(output);
+    }
+
     pub fn damage_tracker(
         &mut self,
         manager: &ZwlrScreencopyManagerV1,
@@ -246,12 +274,37 @@ impl ScreencopyManagerState {
         Some(&mut queue.damage_tracker)
     }
 
+    pub fn reset_damage_tracker(&mut self, manager: &ZwlrScreencopyManagerV1) {
+        let Some(queue) = self.queues.get_mut(manager) else {
+            error!("screencopy queue must not be deleted as long as frames exist");
+            return;
+        };
+
+        queue.damage_tracker = OutputDamageTracker::new((0, 0), 1.0, Transform::Normal);
+    }
+
+    pub fn reset_damage_trackers(&mut self) {
+        for queue in self.queues.values_mut() {
+            queue.damage_tracker = OutputDamageTracker::new((0, 0), 1.0, Transform::Normal);
+        }
+    }
+
     pub fn remove_output(&mut self, output: &Output) {
         for queue in self.queues.values_mut() {
             queue.remove_output(output);
         }
 
         self.cleanup_queues();
+    }
+
+    pub fn drain_output(&mut self, output: &Output) -> Vec<Screencopy> {
+        let mut screencopies = Vec::new();
+        for queue in self.queues.values_mut() {
+            screencopies.extend(queue.drain_output(output));
+        }
+
+        self.cleanup_queues();
+        screencopies
     }
 
     pub fn queues(&self) -> impl Iterator<Item = &ScreencopyQueue> {
@@ -696,6 +749,13 @@ impl Screencopy {
         for Rectangle { loc, size } in damages {
             self.frame
                 .damage(loc.x as u32, loc.y as u32, size.w as u32, size.h as u32);
+        }
+    }
+
+    pub fn damage_whole_buffer(&self) {
+        if self.with_damage {
+            let size = self.buffer_size();
+            self.frame.damage(0, 0, size.w as u32, size.h as u32);
         }
     }
 

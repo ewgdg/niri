@@ -442,7 +442,13 @@ impl Headless {
                     _ => unreachable!(),
                 }
 
-                if output_state.unfinished_animations_remain {
+                let unfinished_animations_remain = output_state.unfinished_animations_remain;
+
+                if !data.niri.monitors_active {
+                    return TimeoutAction::Drop;
+                }
+
+                if unfinished_animations_remain {
                     data.niri.queue_redraw(&output_clone);
                 } else {
                     data.niri

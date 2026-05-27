@@ -352,7 +352,15 @@ pub fn render_to_shm(
     .context("expected shm buffer, but didn't get one")?
 }
 
-pub fn clear_dmabuf(renderer: &mut GlesRenderer, mut dmabuf: Dmabuf) -> anyhow::Result<SyncPoint> {
+pub fn clear_dmabuf(renderer: &mut GlesRenderer, dmabuf: Dmabuf) -> anyhow::Result<SyncPoint> {
+    clear_dmabuf_with_color(renderer, dmabuf, Color32F::TRANSPARENT)
+}
+
+pub fn clear_dmabuf_with_color(
+    renderer: &mut GlesRenderer,
+    mut dmabuf: Dmabuf,
+    color: Color32F,
+) -> anyhow::Result<SyncPoint> {
     let size = dmabuf.size();
     let size = size.to_logical(1, Transform::Normal).to_physical(1);
     let mut target = renderer.bind(&mut dmabuf).context("error binding dmabuf")?;
@@ -360,7 +368,7 @@ pub fn clear_dmabuf(renderer: &mut GlesRenderer, mut dmabuf: Dmabuf) -> anyhow::
         .render(&mut target, size, Transform::Normal)
         .context("error starting frame")?;
     frame
-        .clear(Color32F::TRANSPARENT, &[Rectangle::from_size(size)])
+        .clear(color, &[Rectangle::from_size(size)])
         .context("error clearing")?;
     frame.finish().context("error finishing frame")
 }

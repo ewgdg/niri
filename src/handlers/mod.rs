@@ -650,6 +650,31 @@ impl ScreencopyHandler for State {
             return;
         }
 
+        if !self.niri.monitors_active {
+            if screencopy.with_damage() {
+                self.niri
+                    .screencopy_state
+                    .touch_cast(manager, screencopy.output());
+            }
+
+            // Do not fail while DPMS is off: Sunshine treats repeated failed frames badly.
+            // Submit black frames instead, which keeps the stream alive without leaking content.
+            self.backend.with_primary_renderer(|renderer| {
+                let with_damage = screencopy.with_damage();
+                if let Err(err) = self
+                    .niri
+                    .submit_powered_off_screencopy(renderer, screencopy)
+                {
+                    warn!("error submitting powered-off screencopy: {err:?}");
+                } else if with_damage {
+                    // The client now sees black, while the tracker still describes the last real
+                    // scene. Reset so wake-up reports full damage and replaces the black frame.
+                    self.niri.screencopy_state.reset_damage_tracker(manager);
+                }
+            });
+            return;
+        }
+
         // If with_damage then push it onto the queue for redraw of the output,
         // otherwise render it immediately.
         if screencopy.with_damage() {

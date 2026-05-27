@@ -1841,7 +1841,13 @@ impl Tty {
             }
         }
 
-        if output_state.unfinished_animations_remain {
+        let unfinished_animations_remain = output_state.unfinished_animations_remain;
+
+        if !niri.monitors_active {
+            return;
+        }
+
+        if unfinished_animations_remain {
             niri.queue_redraw(&output);
         } else {
             let is_virtual = VirtualOutputMarker::is_virtual(&output);
