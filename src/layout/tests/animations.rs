@@ -68,6 +68,88 @@ fn set_up_two_in_column() -> Layout<TestWindow> {
     check_ops_with_options(make_options(), ops)
 }
 
+fn set_up_floating() -> Layout<TestWindow> {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams {
+                is_floating: true,
+                ..TestWindowParams::new(1)
+            },
+        },
+        Op::Communicate(1),
+        Op::CompleteAnimations,
+    ];
+
+    check_ops_with_options(make_options(), ops)
+}
+
+#[test]
+fn floating_clientside_resize_preserves_center() {
+    let mut layout = set_up_floating();
+
+    let ops = [
+        Op::SetForcedSize {
+            id: 1,
+            size: Some(Size::new(200, 200)),
+        },
+        Op::Communicate(1),
+    ];
+    check_ops_on_layout(&mut layout, ops);
+
+    assert_snapshot!(format_tiles(&layout), @r"
+    200 × 200 at x:540 y:260
+    ");
+}
+
+#[test]
+fn floating_command_resize_preserves_center() {
+    let mut layout = set_up_floating();
+
+    let ops = [
+        Op::SetWindowWidth {
+            id: Some(1),
+            change: SizeChange::SetFixed(200),
+        },
+        Op::SetForcedSize {
+            id: 1,
+            size: Some(Size::new(200, 200)),
+        },
+        Op::Communicate(1),
+        Op::CompleteAnimations,
+    ];
+    check_ops_on_layout(&mut layout, ops);
+
+    assert_snapshot!(format_tiles(&layout), @r"
+    200 × 200 at x:540 y:260
+    ");
+}
+
+#[test]
+fn floating_interactive_resize_keeps_edge_anchor() {
+    let mut layout = set_up_floating();
+
+    let ops = [
+        Op::InteractiveResizeBegin {
+            window: 1,
+            edges: ResizeEdge::RIGHT,
+        },
+        Op::InteractiveResizeUpdate {
+            window: 1,
+            dx: 100.,
+            dy: 0.,
+        },
+        Op::Communicate(1),
+        Op::InteractiveResizeEnd { window: 1 },
+        Op::CompleteAnimations,
+    ];
+    check_ops_on_layout(&mut layout, ops);
+
+    assert_snapshot!(format_tiles(&layout), @r"
+    200 × 200 at x:590 y:260
+    ");
+}
+
 #[test]
 fn height_resize_animates_next_y() {
     let mut layout = set_up_two_in_column();

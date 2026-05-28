@@ -1026,16 +1026,25 @@ impl<W: LayoutElement> FloatingSpace<W> {
             return false;
         };
 
+        let resize = self
+            .interactive_resize
+            .as_ref()
+            .filter(|resize| &resize.window == id)
+            .map(|resize| resize.data);
+        let resize_anim_config = self.options.animations.window_resize.anim;
+
         let tile = &mut self.tiles[tile_idx];
         let data = &mut self.data[tile_idx];
 
-        let resize = tile.window_mut().interactive_resize_data();
+        let resize = resize.or_else(|| tile.window_mut().interactive_resize_data());
 
         // Do this before calling update_window() so it can get up-to-date info.
         if let Some(serial) = serial {
             tile.window_mut().on_commit(serial);
         }
 
+        let prev_pos = data.logical_pos;
+        let prev_center = data.center();
         let prev_size = data.size;
 
         tile.update_window();
@@ -1051,6 +1060,16 @@ impl<W: LayoutElement> FloatingSpace<W> {
                 offset.y += prev_size.h - data.size.h;
             }
             data.set_logical_pos(data.logical_pos + offset);
+        } else if data.size != prev_size {
+            // Non-interactive floating resizes have no edge anchor, so preserve the visual center.
+            let new_pos = prev_center - data.size.to_point().downscale(2.);
+            data.set_logical_pos(new_pos);
+
+            if tile.resize_animation().is_some() {
+                let move_from = prev_pos - data.logical_pos;
+                tile.animate_move_x_from_with_config(move_from.x, resize_anim_config);
+                tile.animate_move_y_from_with_config(move_from.y, resize_anim_config);
+            }
         }
 
         true
