@@ -5062,6 +5062,24 @@ impl Niri {
         debug!("disabled DRM syncobj protocol");
     }
 
+    fn direct_scanout_feedback_window(&self, output: &Output) -> Option<MappedId> {
+        if self.is_locked() {
+            return None;
+        }
+
+        let mon = self.layout.monitor_for_output(output)?;
+        if !mon.render_above_top_layer() {
+            return None;
+        }
+
+        let window = mon.active_window()?;
+        if window.is_windowed_fullscreen() || !window.sizing_mode().is_fullscreen() {
+            return None;
+        }
+
+        Some(window.id())
+    }
+
     pub fn send_dmabuf_feedbacks(
         &self,
         output: &Output,
@@ -5071,67 +5089,86 @@ impl Niri {
         let _span = tracy_client::span!("Niri::send_dmabuf_feedbacks");
 
         let disable_direct_scanout = self.config.borrow().debug.disable_direct_scanout;
-        let select_client_dmabuf_feedback =
-            |surface: &WlSurface, _: &SurfaceData| -> &DmabufFeedback {
-                if disable_direct_scanout {
-                    // If direct scanout is disabled, scanout tranches cannot provide their intended
-                    // benefit and can still make clients choose fragile scanout-oriented allocations.
-                    return &feedback.render;
-                }
+        let direct_scanout_feedback_window = if disable_direct_scanout {
+            None
+        } else {
+            self.direct_scanout_feedback_window(output)
+        };
 
-                select_dmabuf_feedback(
+        {
+            let select_window_dmabuf_feedback =
+                |allow_direct_scanout_feedback: bool,
+                 surface: &WlSurface,
+                 _: &SurfaceData|
+                 -> &DmabufFeedback {
+                    if !allow_direct_scanout_feedback {
+                        return &feedback.render;
+                    }
+
+                    select_dmabuf_feedback(
+                        surface,
+                        render_element_states,
+                        &feedback.render,
+                        &feedback.scanout,
+                    )
+                };
+            let select_render_dmabuf_feedback = |_: &WlSurface, _: &SurfaceData| &feedback.render;
+
+            // Only fullscreen layout windows can benefit from primary-plane scanout feedback. Keep
+            // layer-shell, pointer, DnD, inactive, and composited windows on render feedback to
+            // avoid pushing clients into fragile scanout-oriented allocations.
+            for mapped in self.layout.windows_for_output(output) {
+                let allow_direct_scanout_feedback =
+                    direct_scanout_feedback_window == Some(mapped.id());
+                mapped.window.send_dmabuf_feedback(
+                    output,
+                    |_, _| Some(output.clone()),
+                    |surface, states| {
+                        select_window_dmabuf_feedback(
+                            allow_direct_scanout_feedback,
+                            surface,
+                            states,
+                        )
+                    },
+                );
+            }
+
+            for surface in layer_map_for_output(output).layers() {
+                surface.send_dmabuf_feedback(
+                    output,
+                    |_, _| Some(output.clone()),
+                    select_render_dmabuf_feedback,
+                );
+            }
+
+            if let Some(surface) = &self.output_state[output].lock_surface {
+                send_dmabuf_feedback_surface_tree(
+                    surface.wl_surface(),
+                    output,
+                    |_, _| Some(output.clone()),
+                    select_render_dmabuf_feedback,
+                );
+            }
+
+            if let Some(surface) = self.dnd_icon.as_ref().map(|icon| &icon.surface) {
+                send_dmabuf_feedback_surface_tree(
                     surface,
-                    render_element_states,
-                    &feedback.render,
-                    &feedback.scanout,
-                )
-            };
+                    output,
+                    surface_primary_scanout_output,
+                    select_render_dmabuf_feedback,
+                );
+            }
 
-        // We can unconditionally send the current output's feedback to regular and layer-shell
-        // surfaces, as they can only be displayed on a single output at a time. Even if a surface
-        // is currently invisible, this is the DMABUF feedback that it should know about.
-        for mapped in self.layout.windows_for_output(output) {
-            mapped.window.send_dmabuf_feedback(
-                output,
-                |_, _| Some(output.clone()),
-                select_client_dmabuf_feedback,
-            );
+            if let CursorImageStatus::Surface(surface) = &self.cursor_manager.cursor_image() {
+                send_dmabuf_feedback_surface_tree(
+                    surface,
+                    output,
+                    surface_primary_scanout_output,
+                    select_render_dmabuf_feedback,
+                );
+            }
         }
 
-        for surface in layer_map_for_output(output).layers() {
-            surface.send_dmabuf_feedback(
-                output,
-                |_, _| Some(output.clone()),
-                select_client_dmabuf_feedback,
-            );
-        }
-
-        if let Some(surface) = &self.output_state[output].lock_surface {
-            send_dmabuf_feedback_surface_tree(
-                surface.wl_surface(),
-                output,
-                |_, _| Some(output.clone()),
-                select_client_dmabuf_feedback,
-            );
-        }
-
-        if let Some(surface) = self.dnd_icon.as_ref().map(|icon| &icon.surface) {
-            send_dmabuf_feedback_surface_tree(
-                surface,
-                output,
-                surface_primary_scanout_output,
-                select_client_dmabuf_feedback,
-            );
-        }
-
-        if let CursorImageStatus::Surface(surface) = &self.cursor_manager.cursor_image() {
-            send_dmabuf_feedback_surface_tree(
-                surface,
-                output,
-                surface_primary_scanout_output,
-                select_client_dmabuf_feedback,
-            );
-        }
     }
 
     pub fn send_frame_callbacks(&mut self, output: &Output) {
