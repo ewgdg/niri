@@ -2553,14 +2553,6 @@ impl State {
             self.niri.screenshot_ui.pointer_motion(point, None);
         }
 
-        if let Some(mru_output) = self.niri.window_mru_ui.output() {
-            if let Some((output, pos_within_output)) = self.niri.output_under(new_pos) {
-                if mru_output == output {
-                    self.niri.window_mru_ui.pointer_motion(pos_within_output);
-                }
-            }
-        }
-
         let under = self.niri.contents_under(new_pos);
 
         // Handle confined pointer.
@@ -2682,14 +2674,6 @@ impl State {
                 .to_i32_round::<i32>();
 
             self.niri.screenshot_ui.pointer_motion(point, None);
-        }
-
-        if let Some(mru_output) = self.niri.window_mru_ui.output() {
-            if let Some((output, pos_within_output)) = self.niri.output_under(pos) {
-                if mru_output == output {
-                    self.niri.window_mru_ui.pointer_motion(pos_within_output);
-                }
-            }
         }
 
         let under = self.niri.contents_under(pos);
@@ -3567,14 +3551,6 @@ impl State {
                 .to_i32_round::<i32>();
 
             self.niri.screenshot_ui.pointer_motion(point, None);
-        }
-
-        if let Some(mru_output) = self.niri.window_mru_ui.output() {
-            if let Some((output, pos_within_output)) = self.niri.output_under(pos) {
-                if mru_output == output {
-                    self.niri.window_mru_ui.pointer_motion(pos_within_output);
-                }
-            }
         }
 
         let under = self.niri.contents_under(pos);
