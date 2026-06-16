@@ -2731,6 +2731,48 @@ impl State {
         self.niri.queue_redraw_all();
     }
 
+    fn select_mru_thumbnail_at(&mut self, pos: Point<f64, Logical>) -> bool {
+        let Some(mru_output) = self.niri.window_mru_ui.output().cloned() else {
+            return false;
+        };
+
+        let id = if let Some((output, pos_within_output)) = self.niri.output_under(pos) {
+            if output == &mru_output {
+                self.niri.window_mru_ui.pointer_press(pos_within_output)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if id.is_some() {
+            self.niri.queue_redraw_mru_output();
+            true
+        } else {
+            self.niri.cancel_mru();
+            false
+        }
+    }
+
+    fn finish_mru_pointer_release_at(&mut self, pos: Point<f64, Logical>) {
+        let Some(mru_output) = self.niri.window_mru_ui.output().cloned() else {
+            return;
+        };
+
+        let should_confirm = if let Some((output, pos_within_output)) = self.niri.output_under(pos) {
+            output == &mru_output && self.niri.window_mru_ui.pointer_release(pos_within_output)
+        } else {
+            false
+        };
+
+        if should_confirm {
+            self.confirm_mru();
+        } else {
+            self.niri.cancel_mru();
+        }
+    }
+
     fn on_pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) {
         let pointer = self.niri.seat.get_pointer().unwrap();
 
@@ -2744,6 +2786,26 @@ impl State {
 
         let mod_key = self.backend.mod_key(&self.niri.config.borrow());
 
+        if let Some(MouseButton::Left) = button {
+            if self.niri.window_mru_ui.is_open() {
+                match button_state {
+                    ButtonState::Pressed => {
+                        let location = pointer.current_location();
+                        self.select_mru_thumbnail_at(location);
+                        self.niri.suppressed_buttons.insert(button_code);
+                        return;
+                    }
+                    ButtonState::Released => {
+                        if self.niri.suppressed_buttons.remove(&button_code) {
+                            let location = pointer.current_location();
+                            self.finish_mru_pointer_release_at(location);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
         // Ignore release events for mouse clicks that triggered a bind.
         if self.niri.suppressed_buttons.remove(&button_code) {
             return;
@@ -2754,27 +2816,7 @@ impl State {
         let mod_down = modifiers.contains(mod_key.to_modifiers());
 
         if ButtonState::Pressed == button_state {
-            let mut is_mru_open = false;
-            if let Some(mru_output) = self.niri.window_mru_ui.output() {
-                is_mru_open = true;
-                if let Some(MouseButton::Left) = button {
-                    let location = pointer.current_location();
-                    let (output, pos_within_output) = self.niri.output_under(location).unwrap();
-                    if mru_output == output {
-                        let id = self.niri.window_mru_ui.pointer_motion(pos_within_output);
-                        if id.is_some() {
-                            self.confirm_mru();
-                        } else {
-                            self.niri.cancel_mru();
-                        }
-                    } else {
-                        self.niri.cancel_mru();
-                    }
-
-                    self.niri.suppressed_buttons.insert(button_code);
-                    return;
-                }
-            }
+            let is_mru_open = self.niri.window_mru_ui.is_open();
 
             if is_mru_open || self.niri.mods_with_mouse_binds.contains(&modifiers) {
                 if let Some(bind) = match button {
@@ -3553,6 +3595,13 @@ impl State {
             self.niri.screenshot_ui.pointer_motion(point, None);
         }
 
+        if self.niri.mru_tablet_tip_down {
+            self.niri.pointer_visibility = PointerVisibility::Visible;
+            self.niri.tablet_cursor_location = Some(pos);
+            self.niri.queue_redraw_all();
+            return;
+        }
+
         let under = self.niri.contents_under(pos);
 
         let tablet_seat = self.niri.seat.tablet_seat();
@@ -3607,6 +3656,14 @@ impl State {
 
         match tip_state {
             TabletToolTipState::Down => {
+                if !self.niri.screenshot_ui.is_open() && self.niri.window_mru_ui.is_open() {
+                    if let Some(pos) = self.niri.tablet_cursor_location {
+                        self.niri.mru_tablet_tip_down = true;
+                        self.select_mru_thumbnail_at(pos);
+                        return;
+                    }
+                }
+
                 let serial = SERIAL_COUNTER.next_serial();
                 tool.tip_down(serial, event.time_msec());
 
@@ -3638,19 +3695,6 @@ impl State {
                                 .pointer_down(output, point, None, mod_down)
                             {
                                 self.niri.queue_redraw_all();
-                            }
-                        }
-                    } else if let Some(mru_output) = self.niri.window_mru_ui.output() {
-                        if let Some((output, pos_within_output)) = self.niri.output_under(pos) {
-                            if mru_output == output {
-                                let id = self.niri.window_mru_ui.pointer_motion(pos_within_output);
-                                if id.is_some() {
-                                    self.confirm_mru();
-                                } else {
-                                    self.niri.cancel_mru();
-                                }
-                            } else {
-                                self.niri.cancel_mru();
                             }
                         }
                     } else if let Some((window, _)) = under.window {
@@ -3690,6 +3734,16 @@ impl State {
                 }
             }
             TabletToolTipState::Up => {
+                if self.niri.mru_tablet_tip_down {
+                    self.niri.mru_tablet_tip_down = false;
+                    if let Some(pos) = self.niri.tablet_cursor_location {
+                        self.finish_mru_pointer_release_at(pos);
+                    } else {
+                        self.niri.cancel_mru();
+                    }
+                    return;
+                }
+
                 if let Some(capture) = self.niri.screenshot_ui.pointer_up(None) {
                     if capture {
                         self.confirm_screenshot(true);
@@ -4166,19 +4220,10 @@ impl State {
                     self.niri.queue_redraw_all();
                 }
             }
-        } else if let Some(mru_output) = self.niri.window_mru_ui.output() {
-            if let Some((output, pos_within_output)) = self.niri.output_under(pos) {
-                if mru_output == output {
-                    let id = self.niri.window_mru_ui.pointer_motion(pos_within_output);
-                    if id.is_some() {
-                        self.confirm_mru();
-                    } else {
-                        self.niri.cancel_mru();
-                    }
-                } else {
-                    self.niri.cancel_mru();
-                }
-            }
+        } else if self.niri.window_mru_ui.is_open() {
+            self.niri.mru_touch_down_slots.insert(slot, pos);
+            self.select_mru_thumbnail_at(pos);
+            return;
         } else if !handle.is_grabbed() {
             if self.niri.layout.is_overview_open()
                 && !mod_down
@@ -4263,6 +4308,11 @@ impl State {
         };
         let slot = evt.slot();
 
+        if let Some(pos) = self.niri.mru_touch_down_slots.remove(&slot) {
+            self.finish_mru_pointer_release_at(pos);
+            return;
+        }
+
         if let Some(capture) = self.niri.screenshot_ui.pointer_up(Some(slot)) {
             if capture {
                 self.confirm_screenshot(true);
@@ -4289,6 +4339,11 @@ impl State {
             return;
         };
         let slot = evt.slot();
+
+        if let Some(last_pos) = self.niri.mru_touch_down_slots.get_mut(&slot) {
+            *last_pos = pos;
+            return;
+        }
 
         if let Some(output) = self.niri.screenshot_ui.selection_output().cloned() {
             let geom = self.niri.global_space.output_geometry(&output).unwrap();
@@ -4332,6 +4387,7 @@ impl State {
         let Some(handle) = self.niri.seat.get_touch() else {
             return;
         };
+        self.niri.mru_touch_down_slots.clear();
         handle.cancel(self);
     }
 

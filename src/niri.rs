@@ -21,7 +21,7 @@ use niri_config::{
 };
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::drm::DrmDeviceFd;
-use smithay::backend::input::Keycode;
+use smithay::backend::input::{Keycode, TouchSlot};
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
@@ -333,6 +333,10 @@ pub struct Niri {
     pub suppressed_keys: HashSet<Keycode>,
     /// Button codes of the mouse buttons to suppress.
     pub suppressed_buttons: HashSet<u32>,
+    /// Touch slots consumed by MRU pointer-style activation, with latest known touch positions.
+    pub mru_touch_down_slots: HashMap<TouchSlot, Point<f64, Logical>>,
+    /// Whether the current tablet tip sequence is consumed by MRU pointer-style activation.
+    pub mru_tablet_tip_down: bool,
     pub bind_cooldown_timers: HashMap<Key, RegistrationToken>,
     pub bind_repeat_timer: Option<RegistrationToken>,
     pub keyboard_focus: KeyboardFocus,
@@ -2632,6 +2636,8 @@ impl Niri {
             popup_grab: None,
             suppressed_keys: HashSet::new(),
             suppressed_buttons: HashSet::new(),
+            mru_touch_down_slots: HashMap::new(),
+            mru_tablet_tip_down: false,
             bind_cooldown_timers: HashMap::new(),
             bind_repeat_timer: Option::default(),
             presentation_state,

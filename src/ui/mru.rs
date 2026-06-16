@@ -169,6 +169,9 @@ struct Inner {
 
     /// Offscreen buffer for the closing fade animation on the main output.
     offscreen: OffscreenBuffer,
+
+    /// Thumbnail selected by a pointer-like press and waiting for matching release confirmation.
+    pressed_thumbnail_id: Option<MappedId>,
 }
 
 #[derive(Debug)]
@@ -943,6 +946,7 @@ impl WindowMruUi {
             scope_panel: Default::default(),
             backdrop_buffers: Default::default(),
             offscreen: OffscreenBuffer::default(),
+            pressed_thumbnail_id: None,
         };
         inner.view_pos = ViewPos::Static(inner.compute_view_pos());
 
@@ -1024,7 +1028,7 @@ impl WindowMruUi {
         self.set_scope(scope);
     }
 
-    pub fn pointer_motion(&mut self, pos_within_output: Point<f64, Logical>) -> Option<MappedId> {
+    pub fn pointer_press(&mut self, pos_within_output: Point<f64, Logical>) -> Option<MappedId> {
         let UiState::Open(inner) = &mut self.state else {
             return None;
         };
@@ -1038,8 +1042,26 @@ impl WindowMruUi {
         let id = inner.thumbnail_under(pos_within_output);
         if let Some(id) = id {
             inner.wmru.set_current(id);
+            inner.pressed_thumbnail_id = Some(id);
+        } else {
+            inner.pressed_thumbnail_id = None;
         }
         id
+    }
+
+    pub fn pointer_release(&mut self, pos_within_output: Point<f64, Logical>) -> bool {
+        let UiState::Open(inner) = &mut self.state else {
+            return false;
+        };
+        let Some(pressed_id) = inner.pressed_thumbnail_id.take() else {
+            return false;
+        };
+        if inner.thumbnail_under(pos_within_output) != Some(pressed_id) {
+            return false;
+        }
+
+        inner.wmru.set_current(pressed_id);
+        true
     }
 
     pub fn first(&mut self) {
