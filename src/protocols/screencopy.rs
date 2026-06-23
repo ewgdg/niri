@@ -86,6 +86,22 @@ impl ScreencopyCast {
     }
 }
 
+fn drain_matching<T>(items: &mut Vec<T>, mut matches: impl FnMut(&T) -> bool) -> Vec<T> {
+    let mut drained = Vec::new();
+    let mut remaining = Vec::with_capacity(items.len());
+
+    for item in items.drain(..) {
+        if matches(&item) {
+            drained.push(item);
+        } else {
+            remaining.push(item);
+        }
+    }
+
+    *items = remaining;
+    drained
+}
+
 impl ScreencopyQueue {
     pub fn new(credentials: Option<Credentials>) -> Self {
         Self {
@@ -125,8 +141,11 @@ impl ScreencopyQueue {
             error!("only screencopy with damage can be pushed in the queue");
         }
 
-        self.touch_cast(screencopy.output());
+        let output = screencopy.output().clone();
+        self.fail_queued_for_output(&output);
+        self.touch_cast(&output);
         self.screencopies.push(screencopy);
+        self.refresh_cast_after_queue_front_change();
     }
 
     fn touch_cast(&mut self, output: &Output) {
@@ -142,17 +161,35 @@ impl ScreencopyQueue {
         }
     }
 
-    pub fn pop(&mut self) -> Screencopy {
-        let rv = self.screencopies.remove(0);
+    fn fail_queued_for_output(&mut self, output: &Output) {
+        if self.screencopies.is_empty() {
+            return;
+        }
 
-        let cast = self.cast.as_mut().unwrap();
+        let removed = drain_matching(&mut self.screencopies, |screencopy| {
+            screencopy.output() == output
+        });
+        drop(removed);
+        self.refresh_cast_after_queue_front_change();
+    }
+
+    fn refresh_cast_after_queue_front_change(&mut self) {
+        let Some(cast) = &mut self.cast else {
+            return;
+        };
+
         if let Some(first) = self.screencopies.first() {
-            // Update cast output (most of the time we expect this to be the same).
             cast.update_output(first.output());
         } else {
             // Queue became empty, update deadline for considering the cast stopped.
             cast.update_deadline();
         }
+    }
+
+    pub fn pop(&mut self) -> Screencopy {
+        let rv = self.screencopies.remove(0);
+
+        self.refresh_cast_after_queue_front_change();
 
         rv
     }
@@ -175,25 +212,11 @@ impl ScreencopyQueue {
             return Vec::new();
         }
 
-        let mut drained = Vec::new();
-        let mut remaining = Vec::new();
-        for screencopy in self.screencopies.drain(..) {
-            if screencopy.output() == output {
-                drained.push(screencopy);
-            } else {
-                remaining.push(screencopy);
-            }
-        }
-        self.screencopies = remaining;
+        let drained = drain_matching(&mut self.screencopies, |screencopy| {
+            screencopy.output() == output
+        });
 
-        if let Some(cast) = &mut self.cast {
-            if let Some(first) = self.screencopies.first() {
-                cast.update_output(first.output());
-            } else {
-                // Queue became empty, update deadline for considering the cast stopped.
-                cast.update_deadline();
-            }
-        }
+        self.refresh_cast_after_queue_front_change();
 
         drained
     }
@@ -208,12 +231,7 @@ impl ScreencopyQueue {
         self.screencopies
             .retain(|screencopy| screencopy.frame != *frame);
 
-        if let Some(cast) = &mut self.cast {
-            if self.screencopies.is_empty() {
-                // Queue became empty, update deadline for considering the cast stopped.
-                cast.update_deadline();
-            }
-        }
+        self.refresh_cast_after_queue_front_change();
     }
 }
 

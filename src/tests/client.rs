@@ -1,10 +1,13 @@
 use std::cmp::min;
 use std::collections::HashMap;
+use std::ffi::CString;
 use std::fmt;
 use std::fmt::Write as _;
+use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::os::unix::net::UnixStream;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use calloop::EventLoop;
@@ -22,6 +25,10 @@ use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_lay
 use smithay::reexports::wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
     self, ZwlrLayerSurfaceV1,
 };
+use smithay::reexports::wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_frame_v1::{
+    self, ZwlrScreencopyFrameV1,
+};
+use smithay::reexports::wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
 use wayland_backend::client::Backend;
 use wayland_client::globals::Global;
 use wayland_client::protocol::wl_buffer::{self, WlBuffer};
@@ -30,6 +37,8 @@ use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_display::WlDisplay;
 use wayland_client::protocol::wl_output::{self, WlOutput};
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
+use wayland_client::protocol::wl_shm::{self, WlShm};
+use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_surface::{self, WlSurface};
 use wayland_client::{Connection, Dispatch, Proxy as _, QueueHandle};
 
@@ -55,6 +64,8 @@ pub struct State {
     pub layer_shell: Option<ZwlrLayerShellV1>,
     pub spbm: Option<WpSinglePixelBufferManagerV1>,
     pub viewporter: Option<WpViewporter>,
+    pub shm: Option<WlShm>,
+    pub screencopy: Option<ZwlrScreencopyManagerV1>,
 
     pub windows: Vec<Window>,
     pub layers: Vec<LayerSurface>,
@@ -86,6 +97,50 @@ pub struct LayerSurface {
     pub close_requested: bool,
 
     pub configures_looked_at: usize,
+}
+
+#[derive(Default)]
+pub struct ScreencopyFrameData {
+    pub buffer: Option<ScreencopyBufferParams>,
+    pub buffer_done: bool,
+    pub damages: Vec<(u32, u32, u32, u32)>,
+    pub ready: bool,
+    pub failed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreencopyBufferParams {
+    pub format: wl_shm::Format,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+}
+
+pub struct ScreencopyFrame {
+    pub frame: ZwlrScreencopyFrameV1,
+    pub data: Arc<Mutex<ScreencopyFrameData>>,
+}
+
+pub struct ShmBuffer {
+    pub buffer: WlBuffer,
+    _fd: OwnedFd,
+    _pool: WlShmPool,
+    ptr: NonNull<u8>,
+    len: usize,
+}
+
+impl ShmBuffer {
+    pub fn pixels(&self) -> &[u32] {
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().cast::<u32>(), self.len / 4) }
+    }
+}
+
+impl Drop for ShmBuffer {
+    fn drop(&mut self) {
+        unsafe {
+            libc::munmap(self.ptr.as_ptr().cast(), self.len);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -181,6 +236,8 @@ impl Client {
             layer_shell: None,
             spbm: None,
             viewporter: None,
+            shm: None,
+            screencopy: None,
             windows: Vec::new(),
             layers: Vec::new(),
         };
@@ -241,6 +298,22 @@ impl Client {
             .unwrap()
             .0
             .clone()
+    }
+
+    pub fn capture_output(&mut self, output: &WlOutput) -> ScreencopyFrame {
+        let data = Arc::new(Mutex::new(ScreencopyFrameData::default()));
+        let frame = self.state.screencopy.as_ref().unwrap().capture_output(
+            0,
+            output,
+            &self.qh,
+            data.clone(),
+        );
+        self.connection.flush().unwrap();
+        ScreencopyFrame { frame, data }
+    }
+
+    pub fn create_shm_buffer(&mut self, params: ScreencopyBufferParams) -> ShmBuffer {
+        self.state.create_shm_buffer(params)
     }
 }
 
@@ -318,6 +391,48 @@ impl State {
             .iter_mut()
             .find(|w| w.surface == *surface)
             .unwrap()
+    }
+
+    pub fn create_shm_buffer(&self, params: ScreencopyBufferParams) -> ShmBuffer {
+        let len = params.stride as usize * params.height as usize;
+        let name = CString::new("niri-test-screencopy").unwrap();
+        let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
+        assert!(fd >= 0, "memfd_create failed");
+        assert_eq!(unsafe { libc::ftruncate(fd, len as libc::off_t) }, 0);
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd.as_fd().as_raw_fd(),
+                0,
+            )
+        };
+        assert_ne!(ptr, libc::MAP_FAILED, "mmap failed");
+        let ptr = NonNull::new(ptr.cast::<u8>()).unwrap();
+
+        let shm = self.shm.as_ref().unwrap();
+        let pool = shm.create_pool(fd.as_fd(), len as i32, &self.qh, ());
+        let buffer = pool.create_buffer(
+            0,
+            params.width as i32,
+            params.height as i32,
+            params.stride as i32,
+            params.format,
+            &self.qh,
+            (),
+        );
+
+        ShmBuffer {
+            buffer,
+            _fd: fd,
+            _pool: pool,
+            ptr,
+            len,
+        }
     }
 }
 
@@ -518,6 +633,12 @@ impl Dispatch<WlRegistry, ()> for State {
                 } else if interface == WpViewporter::interface().name {
                     let version = min(version, WpViewporter::interface().version);
                     state.viewporter = Some(registry.bind(name, version, qh, ()));
+                } else if interface == WlShm::interface().name {
+                    let version = min(version, WlShm::interface().version);
+                    state.shm = Some(registry.bind(name, version, qh, ()));
+                } else if interface == ZwlrScreencopyManagerV1::interface().name {
+                    let version = min(version, ZwlrScreencopyManagerV1::interface().version);
+                    state.screencopy = Some(registry.bind(name, version, qh, ()));
                 } else if interface == WlOutput::interface().name {
                     let version = min(version, WlOutput::interface().version);
                     let output = registry.bind(name, version, qh, ());
@@ -773,5 +894,87 @@ impl Dispatch<WpViewport, ()> for State {
         _qhandle: &QueueHandle<Self>,
     ) {
         unreachable!()
+    }
+}
+
+impl Dispatch<WlShm, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlShm,
+        event: <WlShm as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_shm::Event::Format { .. } => (),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<WlShmPool, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlShmPool,
+        _event: <WlShmPool as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!()
+    }
+}
+
+impl Dispatch<ZwlrScreencopyManagerV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwlrScreencopyManagerV1,
+        _event: <ZwlrScreencopyManagerV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!()
+    }
+}
+
+impl Dispatch<ZwlrScreencopyFrameV1, Arc<Mutex<ScreencopyFrameData>>> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwlrScreencopyFrameV1,
+        event: <ZwlrScreencopyFrameV1 as wayland_client::Proxy>::Event,
+        data: &Arc<Mutex<ScreencopyFrameData>>,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        let mut data = data.lock().unwrap();
+        match event {
+            zwlr_screencopy_frame_v1::Event::Buffer {
+                format,
+                width,
+                height,
+                stride,
+            } => {
+                data.buffer = Some(ScreencopyBufferParams {
+                    format: format.into_result().unwrap(),
+                    width,
+                    height,
+                    stride,
+                });
+            }
+            zwlr_screencopy_frame_v1::Event::Flags { .. } => (),
+            zwlr_screencopy_frame_v1::Event::Ready { .. } => data.ready = true,
+            zwlr_screencopy_frame_v1::Event::Failed => data.failed = true,
+            zwlr_screencopy_frame_v1::Event::Damage {
+                x,
+                y,
+                width,
+                height,
+            } => data.damages.push((x, y, width, height)),
+            zwlr_screencopy_frame_v1::Event::LinuxDmabuf { .. } => (),
+            zwlr_screencopy_frame_v1::Event::BufferDone => data.buffer_done = true,
+            _ => unreachable!(),
+        }
     }
 }

@@ -613,6 +613,20 @@ impl Tty {
             SessionEvent::PauseSession => {
                 debug!("pausing session");
 
+                let outputs: Vec<_> = niri.global_space.outputs().cloned().collect();
+                if !outputs.is_empty()
+                    && self
+                        .with_primary_renderer(|renderer| {
+                            niri.submit_powered_off_screencopies_for_outputs(
+                                renderer,
+                                outputs.iter(),
+                            )
+                        })
+                        .is_none()
+                {
+                    warn!("no primary renderer available for powered-off screencopy drain");
+                }
+
                 self.libinput.suspend();
 
                 for device in self.devices.values_mut() {
@@ -2810,6 +2824,36 @@ impl Tty {
         // Apply config changes to virtual outputs (HEADLESS-*).
         {
             let config = self.config.clone();
+            let outputs_going_off: Vec<_> = {
+                let config = config.borrow();
+                self.virtual_outputs
+                    .outputs
+                    .values()
+                    .filter_map(|(output, _)| {
+                        let name = output.user_data().get::<OutputName>().unwrap();
+                        let is_off = config.outputs.find(&name).is_some_and(|c| c.off);
+                        let is_connected = niri
+                            .global_space
+                            .outputs()
+                            .any(|o| o.name() == output.name());
+                        (is_off && is_connected).then(|| output.clone())
+                    })
+                    .collect()
+            };
+
+            if !outputs_going_off.is_empty()
+                && self
+                    .with_primary_renderer(|renderer| {
+                        niri.submit_powered_off_screencopies_for_outputs(
+                            renderer,
+                            outputs_going_off.iter(),
+                        )
+                    })
+                    .is_none()
+            {
+                warn!("no primary renderer available for powered-off screencopy drain");
+            }
+
             virtual_output::apply_config_to_managed_virtual_outputs(
                 niri,
                 &mut self.virtual_outputs.outputs,

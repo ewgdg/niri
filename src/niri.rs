@@ -3117,23 +3117,9 @@ impl Niri {
         backend.set_monitors_active(false);
 
         let outputs: Vec<_> = self.global_space.outputs().cloned().collect();
-        let mut screencopies = Vec::new();
-        for output in outputs {
-            screencopies.extend(self.screencopy_state.drain_output(&output));
-        }
-
-        if !screencopies.is_empty() {
-            // Keep screencopy clients alive while DPMS is off. Sunshine crashes on failed frames;
-            // black frames avoid exposing real content and release client dmabufs promptly.
-            let _ = backend.with_primary_renderer(|renderer| {
-                for screencopy in screencopies {
-                    if let Err(err) = self.submit_powered_off_screencopy(renderer, screencopy) {
-                        warn!("error submitting powered-off screencopy: {err:?}");
-                    }
-                }
-            });
-            self.screencopy_state.reset_damage_trackers();
-        }
+        let _ = backend.with_primary_renderer(|renderer| {
+            self.submit_powered_off_screencopies_for_outputs(renderer, outputs.iter());
+        });
     }
 
     pub fn activate_monitors(&mut self, backend: &mut Backend) {
@@ -5563,6 +5549,34 @@ impl Niri {
             .context("error clearing powered-off screencopy buffer")?;
         screencopy.submit_after_sync(false, sync, &self.event_loop);
         Ok(())
+    }
+
+    pub fn submit_powered_off_screencopies_for_outputs<'a>(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        outputs: impl IntoIterator<Item = &'a Output>,
+    ) -> usize {
+        let mut screencopies = Vec::new();
+        for output in outputs {
+            screencopies.extend(self.screencopy_state.drain_output(output));
+        }
+
+        // Keep screencopy clients alive while outputs are powered off. Sunshine crashes on failed
+        // frames; black frames avoid exposing real content and release client dmabufs promptly.
+        let mut submitted = 0;
+        for screencopy in screencopies {
+            if let Err(err) = self.submit_powered_off_screencopy(renderer, screencopy) {
+                warn!("error submitting powered-off screencopy: {err:?}");
+            } else {
+                submitted += 1;
+            }
+        }
+
+        if submitted != 0 {
+            self.screencopy_state.reset_damage_trackers();
+        }
+
+        submitted
     }
 
     pub fn render_for_screencopy_without_damage(
