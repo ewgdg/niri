@@ -157,5 +157,9 @@ fn managed_virtual_output_off_black_submits_queued_screencopy() {
     assert!(!data.failed);
     assert_eq!(data.damages, [(0, 0, params.width, params.height)]);
     assert!(buffer.pixels().iter().all(|pixel| *pixel == 0xFF000000));
-    assert!(f.niri().global_space.outputs().all(|output| output.name() != name));
+    assert!(f
+        .niri()
+        .global_space
+        .outputs()
+        .all(|output| output.name() != name));
 }

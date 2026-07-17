@@ -2831,7 +2831,7 @@ impl Tty {
                     .values()
                     .filter_map(|(output, _)| {
                         let name = output.user_data().get::<OutputName>().unwrap();
-                        let is_off = config.outputs.find(&name).is_some_and(|c| c.off);
+                        let is_off = config.outputs.find(name).is_some_and(|c| c.off);
                         let is_connected = niri
                             .global_space
                             .outputs()

@@ -2760,7 +2760,8 @@ impl State {
             return;
         };
 
-        let should_confirm = if let Some((output, pos_within_output)) = self.niri.output_under(pos) {
+        let should_confirm = if let Some((output, pos_within_output)) = self.niri.output_under(pos)
+        {
             output == &mru_output && self.niri.window_mru_ui.pointer_release(pos_within_output)
         } else {
             false

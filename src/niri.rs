@@ -5101,22 +5101,21 @@ impl Niri {
         };
 
         {
-            let select_window_dmabuf_feedback =
-                |allow_direct_scanout_feedback: bool,
-                 surface: &WlSurface,
-                 _: &SurfaceData|
-                 -> &DmabufFeedback {
-                    if !allow_direct_scanout_feedback {
-                        return &feedback.render;
-                    }
+            let select_window_dmabuf_feedback = |allow_direct_scanout_feedback: bool,
+                                                 surface: &WlSurface,
+                                                 _: &SurfaceData|
+             -> &DmabufFeedback {
+                if !allow_direct_scanout_feedback {
+                    return &feedback.render;
+                }
 
-                    select_dmabuf_feedback(
-                        surface,
-                        render_element_states,
-                        &feedback.render,
-                        &feedback.scanout,
-                    )
-                };
+                select_dmabuf_feedback(
+                    surface,
+                    render_element_states,
+                    &feedback.render,
+                    &feedback.scanout,
+                )
+            };
             let select_render_dmabuf_feedback = |_: &WlSurface, _: &SurfaceData| &feedback.render;
 
             // Only fullscreen layout windows can benefit from primary-plane scanout feedback. Keep
@@ -5173,7 +5172,6 @@ impl Niri {
                 );
             }
         }
-
     }
 
     pub fn send_frame_callbacks(&mut self, output: &Output) {
