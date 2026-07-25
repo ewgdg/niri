@@ -4,7 +4,7 @@ use niri_config::utils::MergeWith as _;
 use niri_config::window_rule::{Match, WindowRule};
 use niri_config::{
     BackgroundEffect, BlockOutFrom, BorderRule, CornerRadius, FloatingPosition, PresetSize,
-    ResolvedPopupsRules, ShadowRule, TabIndicatorRule,
+    ResolvedPopupsRules, ShadowRule, TabIndicatorRule, XdgActivationPolicy,
 };
 use niri_ipc::ColumnDisplay;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -72,6 +72,9 @@ pub struct ResolvedWindowRules {
 
     /// Whether the window should open focused.
     pub open_focused: Option<bool>,
+
+    /// How XDG activation requests targeting this window should behave.
+    pub xdg_activation: Option<XdgActivationPolicy>,
 
     /// Extra bound on the minimum window width.
     pub min_width: Option<u16>,
@@ -301,6 +304,9 @@ impl ResolvedWindowRules {
                 }
                 if let Some(x) = rule.tiled_state {
                     resolved.tiled_state = Some(x);
+                }
+                if let Some(x) = rule.xdg_activation {
+                    resolved.xdg_activation = Some(x);
                 }
 
                 resolved

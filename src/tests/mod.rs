@@ -13,3 +13,4 @@ mod screencopy;
 mod transactions;
 mod virtual_output;
 mod window_opening;
+mod xdg_activation;

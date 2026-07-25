@@ -16,6 +16,10 @@ use single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1::WpSingle
 use smithay::reexports::wayland_protocols::wp::single_pixel_buffer;
 use smithay::reexports::wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use smithay::reexports::wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
+use smithay::reexports::wayland_protocols::xdg::activation::v1::client::xdg_activation_token_v1::{
+    self, XdgActivationTokenV1,
+};
+use smithay::reexports::wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
 use smithay::reexports::wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
 use smithay::reexports::wayland_protocols::xdg::shell::client::xdg_toplevel::{self, XdgToplevel};
 use smithay::reexports::wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
@@ -35,8 +39,10 @@ use wayland_client::protocol::wl_buffer::{self, WlBuffer};
 use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_display::WlDisplay;
+use wayland_client::protocol::wl_keyboard::{self, WlKeyboard};
 use wayland_client::protocol::wl_output::{self, WlOutput};
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
+use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::wl_shm::{self, WlShm};
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_surface::{self, WlSurface};
@@ -60,6 +66,10 @@ pub struct State {
     pub outputs: HashMap<WlOutput, String>,
 
     pub compositor: Option<WlCompositor>,
+    pub keyboard: Option<WlKeyboard>,
+    pub keyboard_enter_serial: Option<u32>,
+    pub seat: Option<WlSeat>,
+    pub xdg_activation: Option<XdgActivationV1>,
     pub xdg_wm_base: Option<XdgWmBase>,
     pub layer_shell: Option<ZwlrLayerShellV1>,
     pub spbm: Option<WpSinglePixelBufferManagerV1>,
@@ -232,6 +242,10 @@ impl Client {
             globals: Vec::new(),
             outputs: HashMap::new(),
             compositor: None,
+            keyboard: None,
+            keyboard_enter_serial: None,
+            seat: None,
+            xdg_activation: None,
             xdg_wm_base: None,
             layer_shell: None,
             spbm: None,
@@ -314,6 +328,35 @@ impl Client {
 
     pub fn create_shm_buffer(&mut self, params: ScreencopyBufferParams) -> ShmBuffer {
         self.state.create_shm_buffer(params)
+    }
+
+    pub fn request_activation_token(&self, serial: Option<u32>) -> Arc<Mutex<Option<String>>> {
+        let result = Arc::new(Mutex::new(None));
+        let token = self
+            .state
+            .xdg_activation
+            .as_ref()
+            .unwrap()
+            .get_activation_token(&self.qh, result.clone());
+        if let Some(serial) = serial {
+            token.set_serial(serial, self.state.seat.as_ref().unwrap());
+        }
+        token.commit();
+        self.connection.flush().unwrap();
+        result
+    }
+
+    pub fn activate(&self, token: String, surface: &WlSurface) {
+        self.state
+            .xdg_activation
+            .as_ref()
+            .unwrap()
+            .activate(token, surface);
+        self.connection.flush().unwrap();
+    }
+
+    pub fn keyboard_enter_serial(&self) -> u32 {
+        self.state.keyboard_enter_serial.unwrap()
     }
 }
 
@@ -488,6 +531,10 @@ impl Window {
         self.xdg_toplevel.set_title(title.to_owned());
     }
 
+    pub fn set_app_id(&self, app_id: &str) {
+        self.xdg_toplevel.set_app_id(app_id.to_owned());
+    }
+
     pub fn recent_configures(&mut self) -> impl Iterator<Item = &Configure> {
         let start = self.configures_looked_at;
         self.configures_looked_at = self.configures_received.len();
@@ -621,6 +668,14 @@ impl Dispatch<WlRegistry, ()> for State {
                 if interface == WlCompositor::interface().name {
                     let version = min(version, WlCompositor::interface().version);
                     state.compositor = Some(registry.bind(name, version, qh, ()));
+                } else if interface == XdgActivationV1::interface().name {
+                    let version = min(version, XdgActivationV1::interface().version);
+                    state.xdg_activation = Some(registry.bind(name, version, qh, ()));
+                } else if interface == WlSeat::interface().name {
+                    let version = min(version, WlSeat::interface().version);
+                    let seat: WlSeat = registry.bind(name, version, qh, ());
+                    state.keyboard = Some(seat.get_keyboard(qh, ()));
+                    state.seat = Some(seat);
                 } else if interface == XdgWmBase::interface().name {
                     let version = min(version, XdgWmBase::interface().version);
                     state.xdg_wm_base = Some(registry.bind(name, version, qh, ()));
@@ -653,6 +708,76 @@ impl Dispatch<WlRegistry, ()> for State {
                 state.globals.push(global);
             }
             wl_registry::Event::GlobalRemove { .. } => (),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<XdgActivationV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &XdgActivationV1,
+        _event: <XdgActivationV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!()
+    }
+}
+
+impl Dispatch<WlSeat, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlSeat,
+        event: <WlSeat as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_seat::Event::Capabilities { .. } | wl_seat::Event::Name { .. } => (),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<WlKeyboard, ()> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &WlKeyboard,
+        event: <WlKeyboard as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_keyboard::Event::Enter { serial, .. } => {
+                state.keyboard_enter_serial = Some(serial);
+            }
+            wl_keyboard::Event::Keymap { .. }
+            | wl_keyboard::Event::Leave { .. }
+            | wl_keyboard::Event::Key { .. }
+            | wl_keyboard::Event::Modifiers { .. }
+            | wl_keyboard::Event::RepeatInfo { .. } => (),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<XdgActivationTokenV1, Arc<Mutex<Option<String>>>> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &XdgActivationTokenV1,
+        event: <XdgActivationTokenV1 as wayland_client::Proxy>::Event,
+        data: &Arc<Mutex<Option<String>>>,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            xdg_activation_token_v1::Event::Done { token } => {
+                *data.lock().unwrap() = Some(token);
+            }
             _ => unreachable!(),
         }
     }
