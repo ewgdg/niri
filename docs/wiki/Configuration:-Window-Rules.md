@@ -534,6 +534,36 @@ window-rule {
 
 These properties apply continuously to open windows.
 
+#### `xdg-activation`
+
+Controls XDG activation requests targeting the window.
+This does not affect focusing the window directly with the pointer, keyboard navigation, or compositor actions.
+
+The available policies are:
+
+| Policy | Valid token | Invalid token | No serial |
+| --- | --- | --- | --- |
+| `"default"` | Focus | Follow the global policy | Urgent |
+| `"valid-only"` | Focus | Ignore | Urgent |
+| `"valid-or-urgent"` | Focus | Urgent | Urgent |
+| `"urgent"` | Urgent | Urgent | Urgent |
+| `"never"` | Ignore | Ignore | Ignore |
+
+Expired tokens are always ignored.
+The `"default"` policy follows the normal XDG activation behavior, including `honor-xdg-activation-with-invalid-serial` when that debug option is enabled.
+
+This property is independent from [`open-focused`](#open-focused), which controls Niri's ordinary focus decision when a window opens.
+Use both properties to keep an automation window in the background while preserving an urgency signal:
+
+```kdl
+window-rule {
+    match app-id="^automation-browser$"
+
+    open-focused false
+    xdg-activation "urgent"
+}
+```
+
 #### `block-out-from`
 
 You can block out windows from xdg-desktop-portal screencasts.
