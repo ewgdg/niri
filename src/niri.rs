@@ -132,6 +132,7 @@ use crate::dbus::gnome_shell_introspect::{self, IntrospectToNiri, NiriToIntrospe
 #[cfg(feature = "dbus")]
 use crate::dbus::gnome_shell_screenshot::{NiriToScreenshot, ScreenshotToNiri};
 use crate::frame_clock::FrameClock;
+use crate::handlers::add_mapped_toplevel_pre_commit_hook;
 use crate::handlers::{configure_lock_surface, XDG_ACTIVATION_TOKEN_TIMEOUT};
 use crate::input::pick_color_grab::PickColorGrab;
 use crate::input::scroll_swipe_gesture::ScrollSwipeGesture;
@@ -146,7 +147,8 @@ use crate::layer::MappedLayer;
 use crate::layout::tile::TileRenderElement;
 use crate::layout::workspace::{Workspace, WorkspaceId};
 use crate::layout::{
-    HitType, Layout, LayoutElement as _, LayoutElementRenderElement, MonitorRenderElement,
+    ActivateWindow, AddWindowTarget, HitType, Layout, LayoutElement as _,
+    LayoutElementRenderElement, MonitorRenderElement,
 };
 use crate::niri_render_elements;
 use crate::protocols::ext_workspace::{self, ExtWorkspaceManagerState};
@@ -178,6 +180,7 @@ use crate::ui::screen_transition::{self, ScreenTransition};
 use crate::ui::screenshot_ui::{OutputScreenshot, ScreenshotUi, ScreenshotUiRenderElement};
 use crate::utils::scale::{closest_representable_scale, guess_monitor_scale};
 use crate::utils::spawning::{CHILD_DISPLAY, CHILD_ENV};
+use crate::utils::transaction::Transaction;
 use crate::utils::vblank_throttle::VBlankThrottle;
 use crate::utils::watcher::Watcher;
 use crate::utils::xwayland::satellite::Satellite;
@@ -187,7 +190,9 @@ use crate::utils::{
     send_scale_transform, write_png_rgba8, xwayland,
 };
 use crate::window::mapped::MappedId;
-use crate::window::{InitialConfigureState, Mapped, ResolvedWindowRules, Unmapped, WindowRef};
+use crate::window::{
+    HiddenWindow, InitialConfigureState, Mapped, ResolvedWindowRules, Unmapped, WindowRef,
+};
 
 const CLEAR_COLOR_LOCKED: [f32; 4] = [0.3, 0.1, 0.1, 1.];
 const SCREENCOPY_POWERED_OFF_COLOR: Color32F = Color32F::new(0., 0., 0., 1.);
@@ -243,6 +248,10 @@ pub struct Niri {
 
     // Windows which don't have a buffer attached yet.
     pub unmapped_windows: HashMap<WlSurface, Unmapped>,
+
+    /// Windows which are mapped by the client, but are truly hidden by a window rule: they
+    /// never get added to the layout.
+    pub hidden_windows: HashMap<WlSurface, HiddenWindow>,
 
     /// Layer surfaces which don't have a buffer attached yet.
     pub unmapped_layer_surfaces: HashSet<WlSurface>,
@@ -2585,6 +2594,7 @@ impl Niri {
             sorted_outputs: Vec::default(),
             output_state: HashMap::new(),
             unmapped_windows: HashMap::new(),
+            hidden_windows: HashMap::new(),
             unmapped_layer_surfaces: HashSet::new(),
             mapped_layer_surfaces: HashMap::new(),
             root_surface: HashMap::new(),
@@ -6603,7 +6613,7 @@ impl Niri {
     pub fn recompute_window_rules(&mut self) {
         let _span = tracy_client::span!("Niri::recompute_window_rules");
 
-        let changed = {
+        let (to_hide, windows, to_unhide) = {
             let window_rules = &self.config.borrow().window_rules;
 
             for unmapped in self.unmapped_windows.values_mut() {
@@ -6618,17 +6628,83 @@ impl Niri {
             }
 
             let mut windows = vec![];
+            let mut to_hide = vec![];
             self.layout.with_windows_mut(|mapped, _| {
                 if mapped.recompute_window_rules(window_rules, self.is_at_startup) {
-                    windows.push(mapped.window.clone());
+                    if mapped.rules().hidden {
+                        to_hide.push((mapped.window.clone(), mapped.id()));
+                    } else {
+                        windows.push(mapped.window.clone());
+                    }
                 }
             });
-            let changed = !windows.is_empty();
-            for win in windows {
-                self.layout.update_window(&win, None);
+
+            let mut to_unhide = vec![];
+            for (surface, hidden) in &self.hidden_windows {
+                let new_rules = ResolvedWindowRules::compute(
+                    window_rules,
+                    WindowRef::Hidden(hidden),
+                    self.is_at_startup,
+                );
+                if !new_rules.hidden {
+                    to_unhide.push((surface.clone(), new_rules));
+                }
             }
-            changed
+
+            (to_hide, windows, to_unhide)
         };
+
+        let changed = !windows.is_empty() || !to_hide.is_empty() || !to_unhide.is_empty();
+
+        // Windows that became hidden are removed from the layout without any closing
+        // animation, since they are not being closed.
+        for (window, id) in to_hide {
+            self.stop_casts_for_target(CastTarget::Window { id: id.get() });
+            self.window_mru_ui.remove_window(id);
+            let transaction = Transaction::new();
+            self.layout.remove_window(&window, transaction.clone());
+            if !transaction.is_last() {
+                transaction.register_deadline_timer(&self.event_loop);
+            }
+            let surface = window
+                .toplevel()
+                .expect("no X11 support")
+                .wl_surface()
+                .clone();
+            self.hidden_windows.insert(surface, HiddenWindow { window });
+        }
+
+        for win in windows {
+            self.layout.update_window(&win, None);
+        }
+
+        // Windows that are no longer hidden get added to the layout. We don't animate or
+        // activate them, to avoid surprising the user when they change the config.
+        for (surface, rules) in to_unhide {
+            let HiddenWindow { window } = self.hidden_windows.remove(&surface).unwrap();
+            let toplevel = window.toplevel().expect("no X11 support");
+            let is_floating = rules.compute_open_floating(toplevel);
+            let hook = add_mapped_toplevel_pre_commit_hook(toplevel);
+            let mapped = {
+                let config = self.config.borrow();
+                Mapped::new(window, rules, hook, &config)
+            };
+            let output = self
+                .layout
+                .add_window(
+                    mapped,
+                    AddWindowTarget::Auto,
+                    None,
+                    None,
+                    false,
+                    is_floating,
+                    ActivateWindow::No,
+                )
+                .cloned();
+            if let Some(output) = output {
+                self.queue_redraw(&output);
+            }
+        }
 
         if changed {
             // FIXME: granular.

@@ -819,6 +819,16 @@ impl XdgShellHandler for State {
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         if self
             .niri
+            .hidden_windows
+            .remove(surface.wl_surface())
+            .is_some()
+        {
+            // A hidden toplevel got destroyed.
+            return;
+        }
+
+        if self
+            .niri
             .unmapped_windows
             .remove(surface.wl_surface())
             .is_some()

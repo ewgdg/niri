@@ -7,6 +7,7 @@ use niri_config::{
     ResolvedPopupsRules, ShadowRule, TabIndicatorRule, XdgActivationPolicy,
 };
 use niri_ipc::ColumnDisplay;
+use smithay::desktop::Window;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::utils::{Logical, Size};
 use smithay::wayland::compositor::with_states;
@@ -22,11 +23,25 @@ pub use mapped::Mapped;
 pub mod unmapped;
 pub use unmapped::{InitialConfigureState, Unmapped};
 
-/// Reference to a mapped or unmapped window.
+/// A window that is mapped by the client, but is truly hidden by a window rule: it never gets
+/// added to the layout, so it is not rendered, focused, or otherwise visible to the user.
+#[derive(Debug)]
+pub struct HiddenWindow {
+    pub window: Window,
+}
+
+impl HiddenWindow {
+    pub fn toplevel(&self) -> &ToplevelSurface {
+        self.window.toplevel().expect("no X11 support")
+    }
+}
+
+/// Reference to a mapped, unmapped, or hidden window.
 #[derive(Debug, Clone, Copy)]
 pub enum WindowRef<'a> {
     Unmapped(&'a Unmapped),
     Mapped(&'a Mapped),
+    Hidden(&'a HiddenWindow),
 }
 
 /// Rules fully resolved for a window.
@@ -72,6 +87,10 @@ pub struct ResolvedWindowRules {
 
     /// Whether the window should open focused.
     pub open_focused: Option<bool>,
+
+    /// Whether to keep the window hidden: never add it to the layout, so it is not rendered,
+    /// focused, or otherwise visible to the user.
+    pub hidden: bool,
 
     /// How XDG activation requests targeting this window should behave.
     pub xdg_activation: Option<XdgActivationPolicy>,
@@ -135,19 +154,20 @@ impl<'a> WindowRef<'a> {
         match self {
             WindowRef::Unmapped(unmapped) => unmapped.toplevel(),
             WindowRef::Mapped(mapped) => mapped.toplevel(),
+            WindowRef::Hidden(hidden) => hidden.toplevel(),
         }
     }
 
     pub fn is_focused(self) -> bool {
         match self {
-            WindowRef::Unmapped(_) => false,
+            WindowRef::Unmapped(_) | WindowRef::Hidden(_) => false,
             WindowRef::Mapped(mapped) => mapped.is_focused(),
         }
     }
 
     pub fn is_urgent(self) -> bool {
         match self {
-            WindowRef::Unmapped(_) => false,
+            WindowRef::Unmapped(_) | WindowRef::Hidden(_) => false,
             WindowRef::Mapped(mapped) => mapped.is_urgent(),
         }
     }
@@ -156,6 +176,8 @@ impl<'a> WindowRef<'a> {
         match self {
             WindowRef::Unmapped(_) => true,
             WindowRef::Mapped(mapped) => mapped.is_active_in_column(),
+            // A hidden window is never in a column.
+            WindowRef::Hidden(_) => false,
         }
     }
 
@@ -169,14 +191,14 @@ impl<'a> WindowRef<'a> {
             // may want to set through an is-floating matcher? Like, if you're configuring a
             // specific window to open as floating, you can also set those properties in that same
             // window rule, rather than relying on a different is-floating rule.
-            WindowRef::Unmapped(_) => false,
+            WindowRef::Unmapped(_) | WindowRef::Hidden(_) => false,
             WindowRef::Mapped(mapped) => mapped.is_floating(),
         }
     }
 
     pub fn is_window_cast_target(self) -> bool {
         match self {
-            WindowRef::Unmapped(_) => false,
+            WindowRef::Unmapped(_) | WindowRef::Hidden(_) => false,
             WindowRef::Mapped(mapped) => mapped.is_window_cast_target(),
         }
     }
@@ -258,6 +280,10 @@ impl ResolvedWindowRules {
 
                 if let Some(x) = rule.open_focused {
                     resolved.open_focused = Some(x);
+                }
+
+                if let Some(x) = rule.hidden {
+                    resolved.hidden = x;
                 }
 
                 if let Some(x) = rule.min_width {

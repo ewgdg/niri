@@ -530,6 +530,30 @@ window-rule {
 }
 ```
 
+#### `hidden`
+
+Set this to `true` to keep the window hidden: it is never added to the layout, so it is not
+rendered, focused, or otherwise visible to the user. This is useful for windows that serve a
+background purpose, such as system tray proxies.
+
+The client still believes the window is mapped, and the window rules apply to it dynamically,
+so hiding and showing windows with config reloads works: a mapped window that starts matching
+this rule is removed from the layout, and a hidden window that stops matching it is added to
+the layout.
+
+Note that a hidden window is never rendered, so it will not receive frame callbacks and its
+buffers will not be released; clients that keep committing frames will eventually stall. This
+is intentional.
+
+```kdl
+// Hide the wine-sni-bridge system tray proxy window (including its tray icon windows).
+window-rule {
+    match app-id="^wine-sni-bridge$"
+
+    hidden true
+}
+```
+
 ### Dynamic Properties
 
 These properties apply continuously to open windows.

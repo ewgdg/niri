@@ -23,7 +23,7 @@ use crate::layout::{ActivateWindow, AddWindowTarget, LayoutElement as _};
 use crate::niri::{CastTarget, ClientState, LockState, State};
 use crate::utils::transaction::Transaction;
 use crate::utils::{is_mapped, send_scale_transform};
-use crate::window::{InitialConfigureState, Mapped, ResolvedWindowRules, Unmapped};
+use crate::window::{HiddenWindow, InitialConfigureState, Mapped, ResolvedWindowRules, Unmapped};
 
 impl CompositorHandler for State {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -87,6 +87,26 @@ impl CompositorHandler for State {
                     } = entry.remove();
 
                     window.on_commit();
+
+                    // Check if this window should be truly hidden, before doing anything else.
+                    let hidden = match &state {
+                        InitialConfigureState::Configured { rules, .. } => rules.hidden,
+                        // Can happen when a surface unmaps by attaching a null buffer while
+                        // there are in-flight pending configures.
+                        InitialConfigureState::NotConfigured { .. } => false,
+                    };
+                    if hidden {
+                        trace!("toplevel is hidden by a window rule");
+
+                        // The window will never be rendered, so the dma-buf readiness hook is
+                        // pointless; drop it so that commits are not blocked by it.
+                        self.remove_default_dmabuf_pre_commit_hook(surface);
+
+                        self.niri
+                            .hidden_windows
+                            .insert(surface.clone(), HiddenWindow { window });
+                        return;
+                    }
 
                     let toplevel = window.toplevel().expect("no X11 support");
 
@@ -276,6 +296,26 @@ impl CompositorHandler for State {
                 if unmapped.needs_initial_configure() {
                     let toplevel = unmapped.window.toplevel().expect("no x11 support").clone();
                     self.queue_initial_configure(toplevel);
+                }
+                return;
+            }
+
+            // This is a commit of a hidden toplevel.
+            if let Some(hidden) = self.niri.hidden_windows.get(surface) {
+                let window = hidden.window.clone();
+
+                window.on_commit();
+
+                if !is_mapped(surface) {
+                    // The hidden toplevel got unmapped; it goes back to the normal unmapped
+                    // flow, so that remapping it re-runs the initial configure → map sequence
+                    // afresh.
+                    trace!("hidden toplevel got unmapped");
+
+                    self.niri.hidden_windows.remove(surface);
+                    self.add_default_dmabuf_pre_commit_hook(surface);
+                    let unmapped = Unmapped::new(window);
+                    self.niri.unmapped_windows.insert(surface.clone(), unmapped);
                 }
                 return;
             }

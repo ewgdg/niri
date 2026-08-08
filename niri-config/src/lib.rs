@@ -1846,6 +1846,7 @@ mod tests {
                     open_focused: Some(
                         true,
                     ),
+                    hidden: None,
                     min_width: None,
                     min_height: None,
                     max_width: None,
