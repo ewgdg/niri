@@ -539,7 +539,7 @@ background purpose, such as system tray proxies.
 The client still believes the window is mapped, and the window rules apply to it dynamically,
 so hiding and showing windows with config reloads works: a mapped window that starts matching
 this rule is removed from the layout, and a hidden window that stops matching it is added to
-the layout.
+the layout, restoring its previous workspace, size, and maximized or fullscreen state.
 
 Note that a hidden window is never rendered, so it will not receive frame callbacks and its
 buffers will not be released; clients that keep committing frames will eventually stall. This

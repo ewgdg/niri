@@ -15,6 +15,8 @@ use smithay::wayland::shell::xdg::{
     SurfaceCachedState, ToplevelSurface, XdgToplevelSurfaceRoleAttributes,
 };
 
+use crate::layout::workspace::WorkspaceId;
+use crate::layout::SizingMode;
 use crate::utils::with_toplevel_role;
 
 pub mod mapped;
@@ -28,6 +30,28 @@ pub use unmapped::{InitialConfigureState, Unmapped};
 #[derive(Debug)]
 pub struct HiddenWindow {
     pub window: Window,
+
+    /// Where the window was in the layout when it was hidden, so that unhiding it restores its
+    /// placement.
+    ///
+    /// `None` for windows hidden at map time, which never entered the layout.
+    pub placement: Option<HiddenWindowPlacement>,
+}
+
+/// Placement of a window that was hidden after being in the layout.
+#[derive(Debug)]
+pub struct HiddenWindowPlacement {
+    /// The workspace the window was on.
+    pub workspace_id: Option<WorkspaceId>,
+
+    /// Whether the window was floating.
+    pub is_floating: bool,
+
+    /// The size the window had, in logical pixels.
+    pub size: Size<i32, Logical>,
+
+    /// The sizing mode (maximized / fullscreen) the window had.
+    pub sizing_mode: SizingMode,
 }
 
 impl HiddenWindow {

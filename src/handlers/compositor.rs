@@ -102,9 +102,13 @@ impl CompositorHandler for State {
                         // pointless; drop it so that commits are not blocked by it.
                         self.remove_default_dmabuf_pre_commit_hook(surface);
 
-                        self.niri
-                            .hidden_windows
-                            .insert(surface.clone(), HiddenWindow { window });
+                        self.niri.hidden_windows.insert(
+                            surface.clone(),
+                            HiddenWindow {
+                                window,
+                                placement: None,
+                            },
+                        );
                         return;
                     }
 

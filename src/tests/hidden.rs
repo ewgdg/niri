@@ -135,6 +135,52 @@ fn config_reload_hides_mapped_window() {
 }
 
 #[test]
+fn config_reload_restores_placement() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+
+    let id = f.add_client();
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id("hidden-app");
+    window.commit();
+    f.roundtrip(id);
+
+    let window = f.client(id).window(&surface);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    let (_, mapped) = f.niri().layout.windows().next().unwrap();
+    let size_before = mapped.window.geometry().size;
+    let window = mapped.window.clone();
+    let workspace_id_before = f
+        .niri()
+        .layout
+        .workspaces()
+        .find_map(|(_, _, ws)| ws.has_window(&window).then(|| ws.id()));
+
+    // Hide the window with a reload, then unhide it with another reload.
+    f.niri().config.borrow_mut().window_rules = hidden_config().window_rules;
+    f.niri().recompute_window_rules();
+    assert_eq!(f.niri().hidden_windows.len(), 1);
+
+    f.niri().config.borrow_mut().window_rules = Vec::new();
+    f.niri().recompute_window_rules();
+
+    assert!(f.niri().hidden_windows.is_empty());
+    let (_, mapped) = f.niri().layout.windows().next().unwrap();
+    assert_eq!(mapped.window.geometry().size, size_before);
+    let window = mapped.window.clone();
+    let workspace_id_after = f
+        .niri()
+        .layout
+        .workspaces()
+        .find_map(|(_, _, ws)| ws.has_window(&window).then(|| ws.id()));
+    assert_eq!(workspace_id_after, workspace_id_before);
+}
+
+#[test]
 fn config_reload_unhides_window() {
     let mut f = Fixture::with_config(hidden_config());
     f.add_output(1, (1920, 1080));

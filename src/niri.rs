@@ -16,7 +16,7 @@ use calloop::futures::Scheduler;
 use niri_config::debug::PreviewRender;
 use niri_config::output::MaxBpc;
 use niri_config::{
-    Config, FloatOrInt, Key, Modifiers, OutputName, TrackLayout, WarpMouseToFocusMode,
+    Config, FloatOrInt, Key, Modifiers, OutputName, PresetSize, TrackLayout, WarpMouseToFocusMode,
     WorkspaceReference, Xkb,
 };
 use smithay::backend::allocator::Fourcc;
@@ -148,7 +148,7 @@ use crate::layout::tile::TileRenderElement;
 use crate::layout::workspace::{Workspace, WorkspaceId};
 use crate::layout::{
     ActivateWindow, AddWindowTarget, HitType, Layout, LayoutElement as _,
-    LayoutElementRenderElement, MonitorRenderElement,
+    LayoutElementRenderElement, MonitorRenderElement, SizingMode,
 };
 use crate::niri_render_elements;
 use crate::protocols::ext_workspace::{self, ExtWorkspaceManagerState};
@@ -191,7 +191,8 @@ use crate::utils::{
 };
 use crate::window::mapped::MappedId;
 use crate::window::{
-    HiddenWindow, InitialConfigureState, Mapped, ResolvedWindowRules, Unmapped, WindowRef,
+    HiddenWindow, HiddenWindowPlacement, InitialConfigureState, Mapped, ResolvedWindowRules,
+    Unmapped, WindowRef,
 };
 
 const CLEAR_COLOR_LOCKED: [f32; 4] = [0.3, 0.1, 0.1, 1.];
@@ -1745,8 +1746,8 @@ impl State {
             self.reload_output_config();
         }
 
-        if window_rules_changed {
-            self.niri.recompute_window_rules();
+        if window_rules_changed && self.niri.recompute_window_rules() {
+            self.maybe_warp_cursor_to_focus();
         }
 
         if layer_rules_changed {
@@ -2566,7 +2567,9 @@ impl Niri {
                 |_, _, state| {
                     let _span = tracy_client::span!("startup timeout");
                     state.niri.is_at_startup = false;
-                    state.niri.recompute_window_rules();
+                    if state.niri.recompute_window_rules() {
+                        state.maybe_warp_cursor_to_focus();
+                    }
                     state.niri.recompute_layer_rules();
                     TimeoutAction::Drop
                 },
@@ -6610,7 +6613,11 @@ impl Niri {
         // bit, and even if the delay was zero, we're drawing the same contents anyway.
     }
 
-    pub fn recompute_window_rules(&mut self) {
+    /// Recomputes window rules for all windows and applies the changes.
+    ///
+    /// Returns whether the focused window was hidden by the new rules; the caller should warp
+    /// the cursor to the new focus in that case.
+    pub fn recompute_window_rules(&mut self) -> bool {
         let _span = tracy_client::span!("Niri::recompute_window_rules");
 
         let (to_hide, windows, to_unhide) = {
@@ -6632,7 +6639,12 @@ impl Niri {
             self.layout.with_windows_mut(|mapped, _| {
                 if mapped.recompute_window_rules(window_rules, self.is_at_startup) {
                     if mapped.rules().hidden {
-                        to_hide.push((mapped.window.clone(), mapped.id()));
+                        to_hide.push((
+                            mapped.window.clone(),
+                            mapped.id(),
+                            mapped.is_floating(),
+                            mapped.sizing_mode(),
+                        ));
                     } else {
                         windows.push(mapped.window.clone());
                     }
@@ -6655,10 +6667,18 @@ impl Niri {
         };
 
         let changed = !windows.is_empty() || !to_hide.is_empty() || !to_unhide.is_empty();
+        let mut focused_window_hidden = false;
 
         // Windows that became hidden are removed from the layout without any closing
-        // animation, since they are not being closed.
-        for (window, id) in to_hide {
+        // animation, since they are not being closed. Their placement is remembered so that
+        // unhiding them later puts them back where they were.
+        for (window, id, is_floating, sizing_mode) in to_hide {
+            let was_active = self.layout.focus().map(|m| &m.window) == Some(&window);
+            let workspace_id = self
+                .layout
+                .workspaces()
+                .find_map(|(_, _, ws)| ws.has_window(&window).then(|| ws.id()));
+
             self.stop_casts_for_target(CastTarget::Window { id: id.get() });
             self.window_mru_ui.remove_window(id);
             let transaction = Transaction::new();
@@ -6671,7 +6691,21 @@ impl Niri {
                 .expect("no X11 support")
                 .wl_surface()
                 .clone();
-            self.hidden_windows.insert(surface, HiddenWindow { window });
+            let size = window.geometry().size;
+            self.hidden_windows.insert(
+                surface,
+                HiddenWindow {
+                    window,
+                    placement: Some(HiddenWindowPlacement {
+                        workspace_id,
+                        is_floating,
+                        size,
+                        sizing_mode,
+                    }),
+                },
+            );
+
+            focused_window_hidden |= was_active;
         }
 
         for win in windows {
@@ -6679,28 +6713,64 @@ impl Niri {
         }
 
         // Windows that are no longer hidden get added to the layout. We don't animate or
-        // activate them, to avoid surprising the user when they change the config.
+        // activate them, to avoid surprising the user when they change the config. If the
+        // window was in the layout when it got hidden, its placement is restored.
         for (surface, rules) in to_unhide {
-            let HiddenWindow { window } = self.hidden_windows.remove(&surface).unwrap();
+            let HiddenWindow { window, placement } = self.hidden_windows.remove(&surface).unwrap();
             let toplevel = window.toplevel().expect("no X11 support");
-            let is_floating = rules.compute_open_floating(toplevel);
+
+            let (width, height) = placement
+                .as_ref()
+                .map(|p| {
+                    (
+                        Some(PresetSize::Fixed(p.size.w)),
+                        Some(PresetSize::Fixed(p.size.h)),
+                    )
+                })
+                .unwrap_or((None, None));
+            let is_floating = placement
+                .as_ref()
+                .map(|p| p.is_floating)
+                .unwrap_or_else(|| rules.compute_open_floating(toplevel));
+            let target = match placement.as_ref().and_then(|p| p.workspace_id) {
+                Some(ws_id) if self.layout.workspaces().any(|(_, _, ws)| ws.id() == ws_id) => {
+                    AddWindowTarget::Workspace(ws_id)
+                }
+                _ => AddWindowTarget::Auto,
+            };
+
             let hook = add_mapped_toplevel_pre_commit_hook(toplevel);
             let mapped = {
                 let config = self.config.borrow();
                 Mapped::new(window, rules, hook, &config)
             };
+            let window = mapped.window.clone();
             let output = self
                 .layout
                 .add_window(
                     mapped,
-                    AddWindowTarget::Auto,
-                    None,
-                    None,
+                    target,
+                    width,
+                    height,
                     false,
                     is_floating,
                     ActivateWindow::No,
                 )
                 .cloned();
+
+            if let Some(placement) = &placement {
+                match placement.sizing_mode {
+                    SizingMode::Maximized => {
+                        // Floating windows are never maximized in the layout.
+                        if !placement.is_floating {
+                            self.layout.set_maximized(&window, true);
+                        }
+                    }
+                    SizingMode::Fullscreen => self.layout.set_fullscreen(&window, true),
+                    SizingMode::Normal => (),
+                }
+            }
+
             if let Some(output) = output {
                 self.queue_redraw(&output);
             }
@@ -6710,6 +6780,8 @@ impl Niri {
             // FIXME: granular.
             self.queue_redraw_all();
         }
+
+        focused_window_hidden
     }
 
     pub fn recompute_layer_rules(&mut self) {
