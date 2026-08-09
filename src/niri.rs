@@ -5324,6 +5324,12 @@ impl Niri {
     }
 
     pub fn send_frame_callbacks_on_fallback_timer(&mut self) {
+        // No output can present client content while monitors are inactive. Reactivation queues
+        // redraws for every output, so callbacks will resume once content can be presented again.
+        if !self.monitors_active {
+            return;
+        }
+
         let _span = tracy_client::span!("Niri::send_frame_callbacks_on_fallback_timer");
 
         // Make up a bogus output; we don't care about it here anyway, just the throttling timer.

@@ -6,6 +6,7 @@ mod server;
 
 mod animations;
 mod floating;
+mod frame_callbacks;
 mod fullscreen;
 mod hidden;
 mod layer_shell;
