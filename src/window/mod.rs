@@ -119,6 +119,9 @@ pub struct ResolvedWindowRules {
     /// How XDG activation requests targeting this window should behave.
     pub xdg_activation: Option<XdgActivationPolicy>,
 
+    /// Whether accepted XDG activation requests should focus the window.
+    pub focus_on_xdg_activate: Option<bool>,
+
     /// Extra bound on the minimum window width.
     pub min_width: Option<u16>,
     /// Extra bound on the minimum window height.
@@ -308,6 +311,10 @@ impl ResolvedWindowRules {
 
                 if let Some(x) = rule.hidden {
                     resolved.hidden = x;
+                }
+
+                if let Some(x) = rule.focus_on_xdg_activate {
+                    resolved.focus_on_xdg_activate = Some(x);
                 }
 
                 if let Some(x) = rule.min_width {

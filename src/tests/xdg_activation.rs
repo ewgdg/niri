@@ -45,6 +45,22 @@ fn urgent_downgrades_accepted_invalid_activation_for_mapped_window() {
 }
 
 #[test]
+fn focus_on_xdg_activate_false_marks_valid_activation_urgent() {
+    let (mut fixture, target) = mapped_target_with_focused_peer(
+        r#"
+        window-rule {
+            focus-on-xdg-activate false
+        }
+        "#,
+    );
+    let serial = fixture.client(target.client_id).keyboard_enter_serial();
+
+    activate_target(&mut fixture, &target, Some(serial));
+
+    assert_eq!(target_state(&mut fixture, &target), (false, true));
+}
+
+#[test]
 fn valid_only_ignores_accepted_invalid_activation() {
     let (mut fixture, target) = mapped_target_with_focused_peer(
         r#"

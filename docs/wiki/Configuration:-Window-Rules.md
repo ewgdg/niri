@@ -58,6 +58,8 @@ window-rule {
     default-column-display "tabbed"
     default-floating-position x=100 y=200 relative-to="bottom-left"
     scroll-factor 0.75
+    xdg-activation "default"
+    focus-on-xdg-activate true
 
     focus-ring {
         // off
@@ -647,6 +649,28 @@ window-rule {
 >
 > This is because window title (and app ID) are not double-buffered in the Wayland protocol, so they are not tied to specific window contents.
 > There's no robust way for Firefox to synchronize visibly showing a different tab and changing the window title.
+
+#### `focus-on-xdg-activate`
+
+<sup>Since: next release</sup>
+
+Set this to `false` to prevent the window from receiving focus for an accepted XDG activation
+request. The window will be marked as urgent instead.
+This is useful for apps that steal focus on incoming messages or when opening popup windows like Picture-in-Picture.
+
+This property composes with [`xdg-activation`](#xdg-activation): it changes a request that the
+policy would focus into an urgency request, without changing requests that the policy would ignore
+or already mark urgent.
+
+```kdl
+// Don't let Firefox PiP steal focus.
+window-rule {
+    match title="^Picture-in-Picture$"
+
+    open-floating true
+    focus-on-xdg-activate false
+}
+```
 
 #### `opacity`
 

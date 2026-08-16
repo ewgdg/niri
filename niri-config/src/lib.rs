@@ -1847,6 +1847,7 @@ mod tests {
                         true,
                     ),
                     hidden: None,
+                    focus_on_xdg_activate: None,
                     min_width: None,
                     min_height: None,
                     max_width: None,
@@ -2319,6 +2320,7 @@ mod tests {
                 honor_xdg_activation_with_invalid_serial: false,
                 deactivate_unfocused_windows: false,
                 skip_cursor_only_updates_during_vrr: false,
+                disable_10bit_output: false,
             },
             workspaces: [
                 Workspace {
