@@ -60,7 +60,7 @@ pub use crate::recent_windows::{MruDirection, MruFilter, MruPreviews, MruScope, 
 pub use crate::utils::FloatOrInt;
 use crate::utils::{Flag, MergeWith as _};
 pub use crate::window_rule::{
-    FloatingPosition, PopupsRule, RelativeTo, ResolvedPopupsRules, WindowRule, XdgActivationPolicy,
+    FloatingPosition, PopupsRule, RelativeTo, ResolvedPopupsRules, WindowRule,
 };
 pub use crate::workspace::{Workspace, WorkspaceLayoutPart};
 
@@ -646,49 +646,6 @@ mod tests {
         let config = Config::parse_mem("").unwrap();
         assert_eq!(config.input.keyboard.repeat_delay, 600);
         assert_eq!(config.input.keyboard.repeat_rate, 25);
-    }
-
-    #[test]
-    fn parses_xdg_activation_window_rule_policies() {
-        let config = Config::parse_mem(
-            r#"
-            window-rule { xdg-activation "default"; }
-            window-rule { xdg-activation "valid-only"; }
-            window-rule { xdg-activation "valid-or-urgent"; }
-            window-rule { xdg-activation "urgent"; }
-            window-rule { xdg-activation "never"; }
-            "#,
-        )
-        .unwrap();
-
-        let policies = config
-            .window_rules
-            .iter()
-            .map(|rule| rule.xdg_activation)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            policies,
-            [
-                Some(XdgActivationPolicy::Default),
-                Some(XdgActivationPolicy::ValidOnly),
-                Some(XdgActivationPolicy::ValidOrUrgent),
-                Some(XdgActivationPolicy::Urgent),
-                Some(XdgActivationPolicy::Never),
-            ]
-        );
-    }
-
-    #[test]
-    fn rejects_unknown_xdg_activation_window_rule_policy() {
-        let result = Config::parse_mem(
-            r#"
-            window-rule {
-                xdg-activation "sometimes"
-            }
-            "#,
-        );
-
-        assert!(result.is_err());
     }
 
     #[track_caller]
@@ -1848,6 +1805,7 @@ mod tests {
                     ),
                     hidden: None,
                     focus_on_xdg_activate: None,
+                    urgent_on_xdg_activate: None,
                     min_width: None,
                     min_height: None,
                     max_width: None,
@@ -1930,7 +1888,6 @@ mod tests {
                     ),
                     scroll_factor: None,
                     tiled_state: None,
-                    xdg_activation: None,
                     background_effect: BackgroundEffectRule {
                         xray: None,
                         blur: None,

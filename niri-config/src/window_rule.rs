@@ -38,6 +38,8 @@ pub struct WindowRule {
     pub hidden: Option<bool>,
     #[knuffel(child, unwrap(argument))]
     pub focus_on_xdg_activate: Option<bool>,
+    #[knuffel(child, unwrap(argument))]
+    pub urgent_on_xdg_activate: Option<bool>,
 
     // Rules applied dynamically.
     #[knuffel(child, unwrap(argument))]
@@ -79,21 +81,10 @@ pub struct WindowRule {
     pub scroll_factor: Option<FloatOrInt<0, 100>>,
     #[knuffel(child, unwrap(argument))]
     pub tiled_state: Option<bool>,
-    #[knuffel(child, unwrap(argument))]
-    pub xdg_activation: Option<XdgActivationPolicy>,
     #[knuffel(child, default)]
     pub background_effect: BackgroundEffectRule,
     #[knuffel(child, default)]
     pub popups: PopupsRule,
-}
-
-#[derive(knuffel::DecodeScalar, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum XdgActivationPolicy {
-    Default,
-    ValidOnly,
-    ValidOrUrgent,
-    Urgent,
-    Never,
 }
 
 /// Rules for popup surfaces.

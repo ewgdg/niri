@@ -58,8 +58,8 @@ window-rule {
     default-column-display "tabbed"
     default-floating-position x=100 y=200 relative-to="bottom-left"
     scroll-factor 0.75
-    xdg-activation "default"
     focus-on-xdg-activate true
+    urgent-on-xdg-activate true
 
     focus-ring {
         // off
@@ -560,36 +560,6 @@ window-rule {
 
 These properties apply continuously to open windows.
 
-#### `xdg-activation`
-
-Controls XDG activation requests targeting the window.
-This does not affect focusing the window directly with the pointer, keyboard navigation, or compositor actions.
-
-The available policies are:
-
-| Policy | Valid token | Invalid token | No serial |
-| --- | --- | --- | --- |
-| `"default"` | Focus | Follow the global policy | Urgent |
-| `"valid-only"` | Focus | Ignore | Urgent |
-| `"valid-or-urgent"` | Focus | Urgent | Urgent |
-| `"urgent"` | Urgent | Urgent | Urgent |
-| `"never"` | Ignore | Ignore | Ignore |
-
-Expired tokens are always ignored.
-The `"default"` policy follows the normal XDG activation behavior, including `honor-xdg-activation-with-invalid-serial` when that debug option is enabled.
-
-This property is independent from [`open-focused`](#open-focused), which controls Niri's ordinary focus decision when a window opens.
-Use both properties to keep an automation window in the background while preserving an urgency signal:
-
-```kdl
-window-rule {
-    match app-id="^automation-browser$"
-
-    open-focused false
-    xdg-activation "urgent"
-}
-```
-
 #### `block-out-from`
 
 You can block out windows from xdg-desktop-portal screencasts.
@@ -655,12 +625,9 @@ window-rule {
 <sup>Since: next release</sup>
 
 Set this to `false` to prevent the window from receiving focus for an accepted XDG activation
-request. The window will be marked as urgent instead.
+request. The window will be marked as urgent instead unless [`urgent-on-xdg-activate`](#urgent-on-xdg-activate)
+is also set to `false`.
 This is useful for apps that steal focus on incoming messages or when opening popup windows like Picture-in-Picture.
-
-This property composes with [`xdg-activation`](#xdg-activation): it changes a request that the
-policy would focus into an urgency request, without changing requests that the policy would ignore
-or already mark urgent.
 
 ```kdl
 // Don't let Firefox PiP steal focus.
@@ -669,6 +636,25 @@ window-rule {
 
     open-floating true
     focus-on-xdg-activate false
+}
+```
+
+#### `urgent-on-xdg-activate`
+
+Set this to `false` to ignore XDG activation requests that would mark the window urgent.
+This includes urgency-only requests and requests prevented from focusing the window by
+[`focus-on-xdg-activate false`](#focus-on-xdg-activate).
+
+This property does not clear an existing urgent state or affect direct focus through pointer input,
+keyboard navigation, or compositor actions.
+
+```kdl
+// Do not let an automation browser take focus or request attention.
+window-rule {
+    match app-id="^automation-browser$"
+
+    focus-on-xdg-activate false
+    urgent-on-xdg-activate false
 }
 ```
 

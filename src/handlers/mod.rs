@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use niri_config::XdgActivationPolicy;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::drm::DrmNode;
 use smithay::backend::input::{InputEvent, TabletToolDescriptor};
@@ -796,7 +795,6 @@ impl GammaControlHandler for State {
 }
 
 struct UrgentOnlyMarker;
-struct InvalidSerialMarker;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum XdgActivationAction {
@@ -806,25 +804,17 @@ pub(super) enum XdgActivationAction {
 }
 
 pub(super) fn xdg_activation_action(
-    policy: XdgActivationPolicy,
     token_data: &XdgActivationTokenData,
-    honor_invalid_serial: bool,
+    focus_on_xdg_activate: Option<bool>,
+    urgent_on_xdg_activate: Option<bool>,
 ) -> XdgActivationAction {
-    let urgent_only = token_data.user_data.get::<UrgentOnlyMarker>().is_some();
-    let invalid_serial = token_data.user_data.get::<InvalidSerialMarker>().is_some();
-
-    match policy {
-        XdgActivationPolicy::Never => XdgActivationAction::Ignore,
-        XdgActivationPolicy::Urgent => XdgActivationAction::Urgent,
-        XdgActivationPolicy::ValidOrUrgent if urgent_only || invalid_serial => {
-            XdgActivationAction::Urgent
-        }
-        XdgActivationPolicy::ValidOnly if invalid_serial => XdgActivationAction::Ignore,
-        XdgActivationPolicy::Default if invalid_serial && !honor_invalid_serial => {
-            XdgActivationAction::Ignore
-        }
-        _ if urgent_only => XdgActivationAction::Urgent,
-        _ => XdgActivationAction::Activate,
+    let urgency_only = token_data.user_data.get::<UrgentOnlyMarker>().is_some();
+    if !urgency_only && focus_on_xdg_activate != Some(false) {
+        XdgActivationAction::Activate
+    } else if urgent_on_xdg_activate != Some(false) {
+        XdgActivationAction::Urgent
+    } else {
+        XdgActivationAction::Ignore
     }
 }
 
@@ -853,6 +843,11 @@ impl XdgActivationHandler for State {
         // Clicking on a notification sends clients a perfectly valid activation token from the
         // notification daemon, but alas they ignore it. Maybe in the future the clients are fixed,
         // and we can remove this debug flag.
+        let config = self.niri.config.borrow();
+        if config.debug.honor_xdg_activation_with_invalid_serial {
+            return true;
+        }
+
         // Check the serial against both a keyboard and a pointer, since layer-shell surfaces
         // with no keyboard interactivity won't have any keyboard focus.
         let kb_last_enter = seat.get_keyboard().unwrap().last_enter();
@@ -865,22 +860,7 @@ impl XdgActivationHandler for State {
             return true;
         }
 
-        let config = self.niri.config.borrow();
-        let retain_for_target_policy = config.debug.honor_xdg_activation_with_invalid_serial
-            || config.window_rules.iter().any(|rule| {
-                matches!(
-                    rule.xdg_activation,
-                    Some(XdgActivationPolicy::ValidOrUrgent | XdgActivationPolicy::Urgent)
-                )
-            });
-        if !retain_for_target_policy {
-            return false;
-        }
-
-        // Keep the invalid classification until the target is known so an explicit target policy
-        // can safely downgrade the request to urgency without granting focus.
-        data.user_data.insert_if_missing(|| InvalidSerialMarker);
-        true
+        false
     }
 
     fn request_activation(
@@ -890,24 +870,14 @@ impl XdgActivationHandler for State {
         surface: WlSurface,
     ) {
         if token_data.timestamp.elapsed() < XDG_ACTIVATION_TOKEN_TIMEOUT {
-            let honor_invalid_serial = self
-                .niri
-                .config
-                .borrow()
-                .debug
-                .honor_xdg_activation_with_invalid_serial;
             if let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(&surface) {
                 let window = mapped.window.clone();
-                let policy = mapped
-                    .rules()
-                    .xdg_activation
-                    .unwrap_or(XdgActivationPolicy::Default);
-                let mut action = xdg_activation_action(policy, &token_data, honor_invalid_serial);
-                if action == XdgActivationAction::Activate
-                    && mapped.rules().focus_on_xdg_activate == Some(false)
-                {
-                    action = XdgActivationAction::Urgent;
-                }
+                let rules = mapped.rules();
+                let action = xdg_activation_action(
+                    &token_data,
+                    rules.focus_on_xdg_activate,
+                    rules.urgent_on_xdg_activate,
+                );
 
                 match action {
                     XdgActivationAction::Activate => {

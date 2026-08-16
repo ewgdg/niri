@@ -4,7 +4,7 @@ use niri_config::utils::MergeWith as _;
 use niri_config::window_rule::{Match, WindowRule};
 use niri_config::{
     BackgroundEffect, BlockOutFrom, BorderRule, CornerRadius, FloatingPosition, PresetSize,
-    ResolvedPopupsRules, ShadowRule, TabIndicatorRule, XdgActivationPolicy,
+    ResolvedPopupsRules, ShadowRule, TabIndicatorRule,
 };
 use niri_ipc::ColumnDisplay;
 use smithay::desktop::Window;
@@ -116,11 +116,11 @@ pub struct ResolvedWindowRules {
     /// focused, or otherwise visible to the user.
     pub hidden: bool,
 
-    /// How XDG activation requests targeting this window should behave.
-    pub xdg_activation: Option<XdgActivationPolicy>,
-
     /// Whether accepted XDG activation requests should focus the window.
     pub focus_on_xdg_activate: Option<bool>,
+
+    /// Whether XDG activation requests that do not focus the window should mark it urgent.
+    pub urgent_on_xdg_activate: Option<bool>,
 
     /// Extra bound on the minimum window width.
     pub min_width: Option<u16>,
@@ -317,6 +317,10 @@ impl ResolvedWindowRules {
                     resolved.focus_on_xdg_activate = Some(x);
                 }
 
+                if let Some(x) = rule.urgent_on_xdg_activate {
+                    resolved.urgent_on_xdg_activate = Some(x);
+                }
+
                 if let Some(x) = rule.min_width {
                     resolved.min_width = Some(x);
                 }
@@ -361,9 +365,6 @@ impl ResolvedWindowRules {
                 }
                 if let Some(x) = rule.tiled_state {
                     resolved.tiled_state = Some(x);
-                }
-                if let Some(x) = rule.xdg_activation {
-                    resolved.xdg_activation = Some(x);
                 }
 
                 resolved

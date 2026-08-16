@@ -176,19 +176,11 @@ impl CompositorHandler for State {
                     let token = activation_token_data
                         .as_ref()
                         .filter(|token| token.timestamp.elapsed() < XDG_ACTIVATION_TOKEN_TIMEOUT);
-                    let honor_invalid_serial = self
-                        .niri
-                        .config
-                        .borrow()
-                        .debug
-                        .honor_xdg_activation_with_invalid_serial;
                     let activation_action = token.map(|token| {
                         xdg_activation_action(
-                            rules
-                                .xdg_activation
-                                .unwrap_or(niri_config::XdgActivationPolicy::Default),
                             token,
-                            honor_invalid_serial,
+                            rules.focus_on_xdg_activate,
+                            rules.urgent_on_xdg_activate,
                         )
                     });
                     let mark_urgent = activation_action == Some(XdgActivationAction::Urgent);

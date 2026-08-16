@@ -12,40 +12,7 @@ struct MappedTarget {
 }
 
 #[test]
-fn never_ignores_serialless_activation_for_mapped_window() {
-    let (mut fixture, target) = mapped_target_with_focused_peer(
-        r#"
-        window-rule {
-            xdg-activation "never"
-        }
-        "#,
-    );
-
-    activate_target(&mut fixture, &target, None);
-
-    assert_eq!(target_state(&mut fixture, &target), (false, false));
-}
-
-#[test]
-fn urgent_downgrades_accepted_invalid_activation_for_mapped_window() {
-    let (mut fixture, target) = mapped_target_with_focused_peer(
-        r#"
-        debug {
-            honor-xdg-activation-with-invalid-serial
-        }
-        window-rule {
-            xdg-activation "urgent"
-        }
-        "#,
-    );
-
-    activate_target(&mut fixture, &target, Some(0));
-
-    assert_eq!(target_state(&mut fixture, &target), (false, true));
-}
-
-#[test]
-fn focus_on_xdg_activate_false_marks_valid_activation_urgent() {
+fn focus_disabled_marks_valid_activation_urgent_by_default() {
     let (mut fixture, target) = mapped_target_with_focused_peer(
         r#"
         window-rule {
@@ -61,14 +28,32 @@ fn focus_on_xdg_activate_false_marks_valid_activation_urgent() {
 }
 
 #[test]
-fn valid_only_ignores_accepted_invalid_activation() {
+fn urgency_disabled_ignores_focus_fallback() {
+    let (mut fixture, target) = mapped_target_with_focused_peer(
+        r#"
+        window-rule {
+            focus-on-xdg-activate false
+            urgent-on-xdg-activate false
+        }
+        "#,
+    );
+    let serial = fixture.client(target.client_id).keyboard_enter_serial();
+
+    activate_target(&mut fixture, &target, Some(serial));
+
+    assert_eq!(target_state(&mut fixture, &target), (false, false));
+}
+
+#[test]
+fn urgency_disabled_ignores_accepted_invalid_activation() {
     let (mut fixture, target) = mapped_target_with_focused_peer(
         r#"
         debug {
             honor-xdg-activation-with-invalid-serial
         }
         window-rule {
-            xdg-activation "valid-only"
+            focus-on-xdg-activate false
+            urgent-on-xdg-activate false
         }
         "#,
     );
@@ -79,32 +64,115 @@ fn valid_only_ignores_accepted_invalid_activation() {
 }
 
 #[test]
-fn valid_or_urgent_downgrades_invalid_activation_without_global_override() {
+fn urgency_disabled_ignores_serialless_activation() {
     let (mut fixture, target) = mapped_target_with_focused_peer(
         r#"
         window-rule {
-            xdg-activation "valid-or-urgent"
+            urgent-on-xdg-activate false
         }
         "#,
     );
 
-    activate_target(&mut fixture, &target, Some(0));
+    activate_target(&mut fixture, &target, None);
 
-    assert_eq!(target_state(&mut fixture, &target), (false, true));
+    assert_eq!(target_state(&mut fixture, &target), (false, false));
 }
 
 #[test]
-fn urgent_preserves_attention_for_activation_before_mapping() {
-    let config = Config::parse_mem(
+fn urgency_disabled_does_not_block_valid_activation() {
+    let (mut fixture, target) = mapped_target_with_focused_peer(
         r#"
         window-rule {
-            open-focused false
-            xdg-activation "urgent"
+            urgent-on-xdg-activate false
         }
         "#,
+    );
+    let serial = fixture.client(target.client_id).keyboard_enter_serial();
+
+    activate_target(&mut fixture, &target, Some(serial));
+
+    assert_eq!(target_state(&mut fixture, &target), (true, false));
+}
+
+#[test]
+fn urgency_disabled_ignores_serialless_activation_before_mapping() {
+    assert_eq!(
+        target_state_after_activation_before_mapping(
+            r#"
+            window-rule {
+                open-focused false
+                urgent-on-xdg-activate false
+            }
+            "#,
+        ),
+        (false, false)
+    );
+}
+
+#[test]
+fn serialless_activation_before_mapping_is_urgent_by_default() {
+    assert_eq!(
+        target_state_after_activation_before_mapping(
+            r#"
+            window-rule {
+                open-focused false
+            }
+            "#,
+        ),
+        (false, true)
+    );
+}
+
+#[test]
+fn urgency_disabled_window_remains_directly_focusable() {
+    let (mut fixture, target) = mapped_target_with_focused_peer(
+        r#"
+        window-rule {
+            focus-on-xdg-activate false
+            urgent-on-xdg-activate false
+        }
+        "#,
+    );
+
+    fixture.niri().layout.activate_window(&target.window);
+
+    let focused_window = fixture
+        .niri()
+        .layout
+        .focus()
+        .map(|mapped| mapped.window.clone());
+    assert_eq!(focused_window, Some(target.window));
+}
+
+fn mapped_target_with_focused_peer(config: &str) -> (Fixture, MappedTarget) {
+    let mut fixture = Fixture::with_config(Config::parse_mem(config).unwrap());
+    fixture.add_output(1, (1920, 1080));
+
+    let client_id = fixture.add_client();
+    let surface = map_window(&mut fixture, client_id);
+    let window = fixture
+        .niri()
+        .layout
+        .windows()
+        .next()
+        .unwrap()
+        .1
+        .window
+        .clone();
+    map_window(&mut fixture, client_id);
+
+    (
+        fixture,
+        MappedTarget {
+            client_id,
+            surface,
+            window,
+        },
     )
-    .unwrap();
-    let mut fixture = Fixture::with_config(config);
+}
+
+fn target_state_after_activation_before_mapping(config: &str) -> (bool, bool) {
+    let mut fixture = Fixture::with_config(Config::parse_mem(config).unwrap());
     fixture.add_output(1, (1920, 1080));
 
     let client_id = fixture.add_client();
@@ -142,160 +210,7 @@ fn urgent_preserves_attention_for_activation_before_mapping() {
         .find(|(_, mapped)| mapped.window != source_window)
         .unwrap()
         .1;
-    assert_eq!((target.is_focused(), target.is_urgent()), (false, true));
-}
-
-#[test]
-fn valid_only_accepts_valid_activation() {
-    let (mut fixture, target) = mapped_target_with_focused_peer(
-        r#"
-        window-rule {
-            xdg-activation "valid-only"
-        }
-        "#,
-    );
-    let serial = fixture.client(target.client_id).keyboard_enter_serial();
-
-    activate_target(&mut fixture, &target, Some(serial));
-
-    assert_eq!(target_state(&mut fixture, &target), (true, false));
-}
-
-#[test]
-fn later_target_rule_can_restore_default_policy() {
-    let config = Config::parse_mem(
-        r#"
-        debug {
-            honor-xdg-activation-with-invalid-serial
-        }
-        window-rule {
-            match app-id="^automation$"
-            xdg-activation "never"
-        }
-        window-rule {
-            match app-id="^automation$" title="^Allowed$"
-            xdg-activation "default"
-        }
-        "#,
-    )
-    .unwrap();
-    let mut fixture = Fixture::with_config(config);
-    fixture.add_output(1, (1920, 1080));
-
-    let client_id = fixture.add_client();
-    let window = fixture.client(client_id).create_window();
-    window.set_app_id("automation");
-    window.set_title("Allowed");
-    let surface = window.surface.clone();
-    window.commit();
-    fixture.roundtrip(client_id);
-    map_existing_window(&mut fixture, client_id, &surface);
-    let target = MappedTarget {
-        client_id,
-        surface,
-        window: fixture
-            .niri()
-            .layout
-            .windows()
-            .next()
-            .unwrap()
-            .1
-            .window
-            .clone(),
-    };
-    map_window(&mut fixture, client_id);
-
-    activate_target(&mut fixture, &target, Some(0));
-
-    assert!(target_state(&mut fixture, &target).0);
-}
-
-#[test]
-fn config_reload_updates_policy_for_mapped_target() {
-    let (mut fixture, target) = mapped_target_with_focused_peer(
-        r#"
-        window-rule {
-            xdg-activation "never"
-        }
-        "#,
-    );
-    let updated_rules = Config::parse_mem(
-        r#"
-        window-rule {
-            xdg-activation "urgent"
-        }
-        "#,
-    )
-    .unwrap()
-    .window_rules;
-    fixture.niri().config.borrow_mut().window_rules = updated_rules;
-    fixture.niri().recompute_window_rules();
-
-    activate_target(&mut fixture, &target, None);
-
-    assert_eq!(target_state(&mut fixture, &target), (false, true));
-}
-
-#[test]
-fn protected_window_remains_directly_focusable() {
-    let (mut fixture, target) = mapped_target_with_focused_peer(
-        r#"
-        window-rule {
-            xdg-activation "never"
-        }
-        "#,
-    );
-
-    fixture.niri().layout.activate_window(&target.window);
-
-    let focused_window = fixture
-        .niri()
-        .layout
-        .focus()
-        .map(|mapped| mapped.window.clone());
-    assert_eq!(focused_window, Some(target.window));
-}
-
-#[test]
-fn default_rejects_invalid_activation_without_global_override() {
-    let (mut fixture, target) = mapped_target_with_focused_peer(
-        r#"
-        window-rule {
-            xdg-activation "default"
-        }
-        "#,
-    );
-
-    activate_target(&mut fixture, &target, Some(0));
-
-    assert_eq!(target_state(&mut fixture, &target), (false, false));
-}
-
-fn mapped_target_with_focused_peer(config: &str) -> (Fixture, MappedTarget) {
-    let mut fixture = Fixture::with_config(Config::parse_mem(config).unwrap());
-    fixture.add_output(1, (1920, 1080));
-
-    let client_id = fixture.add_client();
-    let surface = map_window(&mut fixture, client_id);
-    let window = fixture
-        .niri()
-        .layout
-        .windows()
-        .next()
-        .unwrap()
-        .1
-        .window
-        .clone();
-    map_window(&mut fixture, client_id);
-
-    (
-        fixture,
-        MappedTarget {
-            client_id,
-            surface,
-            window,
-        },
-    )
+    (target.is_focused(), target.is_urgent())
 }
 
 fn activate_target(fixture: &mut Fixture, target: &MappedTarget, serial: Option<u32>) {
