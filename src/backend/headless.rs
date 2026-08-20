@@ -20,7 +20,6 @@ use smithay::backend::drm::DrmNode;
 use smithay::backend::egl::native::EGLSurfacelessDisplay;
 use smithay::backend::egl::{EGLContext, EGLDevice, EGLDisplay};
 use smithay::backend::libinput::LibinputInputBackend;
-use smithay::backend::renderer::element::RenderElementStates;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::{ImportDma, ImportEgl};
 use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
@@ -397,14 +396,19 @@ impl Headless {
     pub fn render(&mut self, niri: &mut Niri, output: &Output) -> RenderResult {
         let now = get_monotonic_time();
 
-        let states = RenderElementStates::default();
-        let mut presentation_feedbacks = niri.take_presentation_feedbacks(output, &states);
-        presentation_feedbacks.presented::<_, smithay::utils::Monotonic>(
-            now,
-            Refresh::Unknown,
-            0,
-            wp_presentation_feedback::Kind::empty(),
-        );
+        if niri.virtual_output_has_presentation_feedbacks(output) {
+            if let Some(renderer) = self.renderer.as_mut() {
+                let states = niri.virtual_output_render_element_states(renderer, output);
+                niri.update_primary_scanout_output(output, &states);
+                let mut presentation_feedbacks = niri.take_presentation_feedbacks(output, &states);
+                presentation_feedbacks.presented::<_, smithay::utils::Monotonic>(
+                    now,
+                    Refresh::Unknown,
+                    0,
+                    wp_presentation_feedback::Kind::empty(),
+                );
+            }
+        }
 
         let output_state = niri.output_state.get_mut(output).unwrap();
         match mem::replace(&mut output_state.redraw_state, RedrawState::Idle) {

@@ -2360,26 +2360,31 @@ impl Tty {
         self.ipc_outputs.clone()
     }
 
-    /// Render a virtual output (no actual rendering, just presentation feedback).
+    /// Advance a virtual output without rendering a DRM framebuffer.
     fn render_virtual_output(
         &mut self,
         niri: &mut Niri,
         output: &Output,
         target_presentation_time: Duration,
     ) -> RenderResult {
-        use smithay::backend::renderer::element::RenderElementStates;
         use smithay::wayland::presentation::Refresh;
 
         let now = get_monotonic_time();
 
-        let states = RenderElementStates::default();
-        let mut presentation_feedbacks = niri.take_presentation_feedbacks(output, &states);
-        presentation_feedbacks.presented::<_, smithay::utils::Monotonic>(
-            now,
-            Refresh::Unknown,
-            0,
-            wp_presentation_feedback::Kind::empty(),
-        );
+        if niri.virtual_output_has_presentation_feedbacks(output) {
+            if let Some(states) = self.with_primary_renderer(|renderer| {
+                niri.virtual_output_render_element_states(renderer, output)
+            }) {
+                niri.update_primary_scanout_output(output, &states);
+                let mut presentation_feedbacks = niri.take_presentation_feedbacks(output, &states);
+                presentation_feedbacks.presented::<_, smithay::utils::Monotonic>(
+                    now,
+                    Refresh::Unknown,
+                    0,
+                    wp_presentation_feedback::Kind::empty(),
+                );
+            }
+        }
 
         // Update the frame clock so animation timing works correctly.
         let Some(output_state) = niri.output_state.get_mut(output) else {

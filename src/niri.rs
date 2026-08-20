@@ -93,7 +93,7 @@ use smithay::wayland::keyboard_shortcuts_inhibit::{
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraintsState};
 use smithay::wayland::pointer_gestures::PointerGesturesState;
-use smithay::wayland::presentation::PresentationState;
+use smithay::wayland::presentation::{PresentationFeedbackCachedState, PresentationState};
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::security_context::SecurityContextState;
 use smithay::wayland::selection::data_device::{set_data_device_selection, DataDeviceState};
@@ -511,6 +511,8 @@ pub struct OutputState {
     screen_transition: Option<ScreenTransition>,
     /// Damage tracker used for the debug damage visualization.
     pub debug_damage_tracker: OutputDamageTracker,
+    /// Tracks logical presentation visibility for outputs without a DRM framebuffer.
+    virtual_output_damage_tracker: Option<OutputDamageTracker>,
 }
 
 #[derive(Debug, Default)]
@@ -2997,6 +2999,8 @@ impl Niri {
             lock_color_buffer: SolidColorBuffer::new(size, CLEAR_COLOR_LOCKED),
             screen_transition: None,
             debug_damage_tracker: OutputDamageTracker::from_output(&output),
+            virtual_output_damage_tracker: crate::backend::VirtualOutputMarker::is_virtual(&output)
+                .then(|| OutputDamageTracker::from_output(&output)),
         };
         let rv = self.output_state.insert(output.clone(), state);
         assert!(rv.is_none(), "output was already tracked");
@@ -5418,6 +5422,58 @@ impl Niri {
                 |_, _| None,
             );
         }
+    }
+
+    /// Check whether a virtual tick needs the scene visibility pass used by presentation feedback.
+    pub fn virtual_output_has_presentation_feedbacks(&self, output: &Output) -> bool {
+        let mut has_feedbacks = false;
+        let mut check_surface = |_: &WlSurface, states: &SurfaceData| {
+            let mut guard = states.cached_state.get::<PresentationFeedbackCachedState>();
+            has_feedbacks |= !guard.current().callbacks.is_empty();
+        };
+
+        if let CursorImageStatus::Surface(surface) = &self.cursor_manager.cursor_image() {
+            with_surfaces_surface_tree(surface, &mut check_surface);
+        }
+
+        if let Some(surface) = self.dnd_icon.as_ref().map(|icon| &icon.surface) {
+            with_surfaces_surface_tree(surface, &mut check_surface);
+        }
+
+        for mapped in self.layout.windows_for_output(output) {
+            mapped.window.with_surfaces(&mut check_surface);
+        }
+
+        for surface in layer_map_for_output(output).layers() {
+            surface.with_surfaces(&mut check_surface);
+        }
+
+        if let Some(surface) = &self.output_state[output].lock_surface {
+            with_surfaces_surface_tree(surface.wl_surface(), &mut check_surface);
+        }
+
+        has_feedbacks
+    }
+
+    /// Compute which surfaces the virtual output presents without rendering a DRM frame.
+    pub fn virtual_output_render_element_states(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        output: &Output,
+    ) -> RenderElementStates {
+        let ctx = RenderCtx {
+            renderer,
+            target: RenderTarget::Output,
+            xray: None,
+        };
+        let elements = self.render_to_vec(ctx, output, true);
+        let damage_tracker = self
+            .output_state
+            .get_mut(output)
+            .and_then(|state| state.virtual_output_damage_tracker.as_mut())
+            .expect("virtual output must have a presentation damage tracker");
+        let (_, states) = damage_tracker.damage_output(1, &elements).unwrap();
+        states
     }
 
     pub fn take_presentation_feedbacks(

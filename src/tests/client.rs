@@ -13,6 +13,12 @@ use std::time::Duration;
 use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 use single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1;
+use smithay::reexports::wayland_protocols::wp::presentation_time::client::wp_presentation::{
+    self, WpPresentation,
+};
+use smithay::reexports::wayland_protocols::wp::presentation_time::client::wp_presentation_feedback::{
+    self, WpPresentationFeedback,
+};
 use smithay::reexports::wayland_protocols::wp::single_pixel_buffer;
 use smithay::reexports::wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use smithay::reexports::wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
@@ -72,6 +78,7 @@ pub struct State {
     pub xdg_activation: Option<XdgActivationV1>,
     pub xdg_wm_base: Option<XdgWmBase>,
     pub layer_shell: Option<ZwlrLayerShellV1>,
+    pub presentation: Option<WpPresentation>,
     pub spbm: Option<WpSinglePixelBufferManagerV1>,
     pub viewporter: Option<WpViewporter>,
     pub shm: Option<WlShm>,
@@ -129,6 +136,17 @@ pub struct ScreencopyBufferParams {
 pub struct ScreencopyFrame {
     pub frame: ZwlrScreencopyFrameV1,
     pub data: Arc<Mutex<ScreencopyFrameData>>,
+}
+
+#[derive(Debug, Default)]
+pub struct PresentationFeedbackData {
+    pub presented: bool,
+    pub discarded: bool,
+}
+
+pub struct PresentationFeedback {
+    _feedback: WpPresentationFeedback,
+    pub data: Arc<Mutex<PresentationFeedbackData>>,
 }
 
 pub struct ShmBuffer {
@@ -248,6 +266,7 @@ impl Client {
             xdg_activation: None,
             xdg_wm_base: None,
             layer_shell: None,
+            presentation: None,
             spbm: None,
             viewporter: None,
             shm: None,
@@ -312,6 +331,20 @@ impl Client {
             .unwrap()
             .0
             .clone()
+    }
+
+    pub fn request_presentation_feedback(&self, surface: &WlSurface) -> PresentationFeedback {
+        let data = Arc::new(Mutex::new(PresentationFeedbackData::default()));
+        let feedback =
+            self.state
+                .presentation
+                .as_ref()
+                .unwrap()
+                .feedback(surface, &self.qh, data.clone());
+        PresentationFeedback {
+            _feedback: feedback,
+            data,
+        }
     }
 
     pub fn capture_output(&mut self, output: &WlOutput) -> ScreencopyFrame {
@@ -688,6 +721,9 @@ impl Dispatch<WlRegistry, ()> for State {
                 } else if interface == ZwlrLayerShellV1::interface().name {
                     let version = min(version, ZwlrLayerShellV1::interface().version);
                     state.layer_shell = Some(registry.bind(name, version, qh, ()));
+                } else if interface == WpPresentation::interface().name {
+                    let version = min(version, WpPresentation::interface().version);
+                    state.presentation = Some(registry.bind(name, version, qh, ()));
                 } else if interface == WpSinglePixelBufferManagerV1::interface().name {
                     let version = min(version, WpSinglePixelBufferManagerV1::interface().version);
                     state.spbm = Some(registry.bind(name, version, qh, ()));
@@ -984,6 +1020,41 @@ impl Dispatch<WlBuffer, ()> for State {
     ) {
         match event {
             wl_buffer::Event::Release => (),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<WpPresentation, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WpPresentation,
+        event: <WpPresentation as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            wp_presentation::Event::ClockId { .. } => (),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<WpPresentationFeedback, Arc<Mutex<PresentationFeedbackData>>> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WpPresentationFeedback,
+        event: <WpPresentationFeedback as wayland_client::Proxy>::Event,
+        data: &Arc<Mutex<PresentationFeedbackData>>,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        let mut data = data.lock().unwrap();
+        match event {
+            wp_presentation_feedback::Event::SyncOutput { .. } => (),
+            wp_presentation_feedback::Event::Presented { .. } => data.presented = true,
+            wp_presentation_feedback::Event::Discarded => data.discarded = true,
             _ => unreachable!(),
         }
     }

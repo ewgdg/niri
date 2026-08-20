@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn visible_surface_on_virtual_output_receives_presentation_feedback() {
+    let mut f = Fixture::new();
+    {
+        let state = f.niri_state();
+        state
+            .backend
+            .create_virtual_output(&mut state.niri, 1920, 1080, 60, Some("virt".to_owned()))
+            .unwrap();
+    }
+
+    let id = f.add_client();
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.commit();
+    f.roundtrip(id);
+
+    let window = f.client(id).window(&surface);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    let feedback = f.client(id).request_presentation_feedback(&surface);
+    f.client(id).window(&surface).commit();
+    f.double_roundtrip(id);
+
+    let feedback = feedback.data.lock().unwrap();
+    assert!(feedback.presented);
+    assert!(!feedback.discarded);
+}
+
+#[test]
 fn virtual_output_custom_mode_does_not_accumulate_modes() {
     let mut f = Fixture::new();
 
