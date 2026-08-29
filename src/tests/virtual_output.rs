@@ -1,3 +1,6 @@
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
 use super::*;
 
 #[test]
@@ -24,11 +27,61 @@ fn visible_surface_on_virtual_output_receives_presentation_feedback() {
 
     let feedback = f.client(id).request_presentation_feedback(&surface);
     f.client(id).window(&surface).commit();
+    f.roundtrip(id);
+
+    // Presentation feedback is emitted on the virtual output's next 60 Hz refresh.
+    std::thread::sleep(Duration::from_millis(20));
     f.double_roundtrip(id);
 
     let feedback = feedback.data.lock().unwrap();
     assert!(feedback.presented);
     assert!(!feedback.discarded);
+}
+
+#[test]
+fn virtual_output_frame_callbacks_are_paced_to_refresh() {
+    let mut fixture = Fixture::new();
+    {
+        let state = fixture.niri_state();
+        state
+            .backend
+            .create_virtual_output(&mut state.niri, 1920, 1080, 2, Some("virt".to_owned()))
+            .unwrap();
+    }
+
+    let client_id = fixture.add_client();
+    let window = fixture.client(client_id).create_window();
+    let surface = window.surface.clone();
+    window.commit();
+    fixture.roundtrip(client_id);
+
+    // Let the initial output redraw finish so the first client commit starts a fresh refresh cycle.
+    std::thread::sleep(Duration::from_millis(550));
+    fixture.dispatch();
+
+    let first_callback = {
+        let window = fixture.client(client_id).window(&surface);
+        window.attach_new_buffer();
+        window.ack_last();
+        let callback = window.request_frame_callback();
+        window.commit();
+        callback
+    };
+    fixture.double_roundtrip(client_id);
+    assert!(first_callback.done.load(Ordering::Relaxed));
+
+    let second_callback = {
+        let window = fixture.client(client_id).window(&surface);
+        let callback = window.request_frame_callback();
+        window.commit();
+        callback
+    };
+    fixture.double_roundtrip(client_id);
+    assert!(!second_callback.done.load(Ordering::Relaxed));
+
+    std::thread::sleep(Duration::from_millis(550));
+    fixture.double_roundtrip(client_id);
+    assert!(second_callback.done.load(Ordering::Relaxed));
 }
 
 #[test]

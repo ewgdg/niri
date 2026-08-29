@@ -3803,11 +3803,18 @@ impl Niri {
     pub fn redraw_queued_outputs(&mut self, backend: &mut Backend) {
         let _span = tracy_client::span!("Niri::redraw_queued_outputs");
 
-        while let Some((output, _)) = self.output_state.iter().find(|(_, state)| {
-            matches!(
+        while let Some((output, _)) = self.output_state.iter().find(|(output, state)| {
+            let redraw_is_queued = matches!(state.redraw_state, RedrawState::Queued);
+            let redraw_is_queued_during_estimated_vblank = matches!(
                 state.redraw_state,
-                RedrawState::Queued | RedrawState::WaitingForEstimatedVBlankAndQueued(_)
-            )
+                RedrawState::WaitingForEstimatedVBlankAndQueued(_)
+            );
+
+            // Virtual outputs have no real VBlank to stop callback-driven commits from redrawing
+            // immediately. Keep their redraw queued until the estimated VBlank timer fires.
+            redraw_is_queued
+                || (redraw_is_queued_during_estimated_vblank
+                    && !crate::backend::VirtualOutputMarker::is_virtual(output))
         }) {
             trace!("redrawing output");
             let output = output.clone();
