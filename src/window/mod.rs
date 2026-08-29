@@ -17,7 +17,7 @@ use smithay::wayland::shell::xdg::{
 
 use crate::layout::workspace::WorkspaceId;
 use crate::layout::SizingMode;
-use crate::utils::with_toplevel_role;
+use crate::utils::{client_environment_matches, with_toplevel_role};
 
 pub mod mapped;
 pub use mapped::Mapped;
@@ -487,6 +487,12 @@ fn window_matches(window: WindowRef, role: &XdgToplevelSurfaceRoleAttributes, m:
             return false;
         };
         if !title_re.0.is_match(title) {
+            return false;
+        }
+    }
+
+    if let Some(client_env_re) = &m.client_env {
+        if !client_environment_matches(window.toplevel().wl_surface(), client_env_re) {
             return false;
         }
     }

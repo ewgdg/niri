@@ -189,7 +189,7 @@ use crate::utils::xwayland::satellite::Satellite;
 use crate::utils::{
     center, center_f64, expand_home, get_monotonic_time, ipc_transform_to_smithay, is_mapped,
     logical_output, make_screenshot_path, output_matches_name, output_size, panel_orientation,
-    send_scale_transform, write_png_rgba8, xwayland,
+    send_scale_transform, write_png_rgba8, xwayland, ClientEnvironment,
 };
 use crate::window::mapped::MappedId;
 use crate::window::{
@@ -2763,6 +2763,18 @@ impl Niri {
             credentials_unknown,
         } = client;
 
+        let client_environment = if credentials_unknown {
+            None
+        } else {
+            match ClientEnvironment::capture(&client) {
+                Ok(environment) => Some(environment),
+                Err(err) => {
+                    trace!("error capturing Wayland client environment: {err}");
+                    None
+                }
+            }
+        };
+
         let config = self.config.borrow();
         let data = Arc::new(ClientState {
             compositor_state: Default::default(),
@@ -2770,6 +2782,7 @@ impl Niri {
             primary_selection_disabled: config.clipboard.disable_primary,
             restricted,
             credentials_unknown,
+            client_environment,
         });
 
         if let Err(err) = self.display_handle.insert_client(client, data) {
@@ -7006,6 +7019,8 @@ pub struct ClientState {
     pub restricted: bool,
     /// We cannot retrieve this client's socket credentials.
     pub credentials_unknown: bool,
+    /// Environment captured from the process that opened this client's Wayland connection.
+    pub client_environment: Option<ClientEnvironment>,
 }
 
 impl ClientData for ClientState {

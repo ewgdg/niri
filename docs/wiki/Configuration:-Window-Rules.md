@@ -30,6 +30,7 @@ Here are all matchers and properties that a window rule could have:
 window-rule {
     match title="Firefox"
     match app-id="Alacritty"
+    match client-env="^APP_CONTEXT=automation$"
     match is-active=true
     match is-focused=false
     match is-active-in-column=true
@@ -204,6 +205,32 @@ You can find the title and the app ID of a window by running `niri msg pick-wind
 >     "tooltip-format": "{title} | {app_id}",
 > }
 > ```
+
+#### `client-env`
+
+Matches regular expressions against individual UTF-8 `KEY=VALUE` entries from the initial
+environment of the process that opened the window's Wayland connection. Niri captures the
+environment when it accepts the connection, before the client creates any windows.
+
+This can identify windows launched by automation without changing their app ID:
+
+```kdl
+window-rule {
+    match client-env="^PI_CODING_AGENT=true$"
+
+    open-focused false
+    focus-on-xdg-activate false
+}
+```
+
+The environment belongs to the Wayland connection, so every window created through the same
+connection has the same values. A new window created by an already-running browser or another
+single-instance application will use that existing process's environment, not the environment of
+the command that requested the window.
+
+This matcher does not identify individual X11 applications running through Xwayland Satellite.
+It does not match when niri cannot read the client process environment. Clients control their own
+environment, so do not use this matcher as a security check.
 
 #### `is-active`
 

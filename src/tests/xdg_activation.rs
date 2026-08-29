@@ -12,6 +12,67 @@ struct MappedTarget {
 }
 
 #[test]
+fn matching_client_environment_prevents_initial_focus() {
+    assert!(std::env::var_os("PATH").is_some());
+    assert!(!window_opens_focused(
+        r#"
+        window-rule {
+            match client-env="^PATH=" title="^target$"
+            open-focused false
+        }
+        "#,
+        false,
+    ));
+}
+
+#[test]
+fn non_matching_client_environment_keeps_initial_focus() {
+    assert!(window_opens_focused(
+        r#"
+        window-rule {
+            match client-env="^NIRI_TEST_MISSING_CLIENT_ENV=" title="^target$"
+            open-focused false
+        }
+        "#,
+        false,
+    ));
+}
+
+#[test]
+fn unknown_client_credentials_do_not_match_environment() {
+    assert!(window_opens_focused(
+        r#"
+        window-rule {
+            match client-env="^PATH=" title="^target$"
+            open-focused false
+        }
+        "#,
+        true,
+    ));
+}
+
+#[test]
+fn client_environment_rule_applies_after_config_reload() {
+    let (mut fixture, target) = mapped_target_with_focused_peer("");
+    let config = Config::parse_mem(
+        r#"
+        window-rule {
+            match client-env="^PATH="
+            focus-on-xdg-activate false
+        }
+        "#,
+    )
+    .unwrap();
+    fixture.niri().config.borrow_mut().window_rules = config.window_rules;
+    fixture.niri().recompute_window_rules();
+
+    let serial = fixture.client(target.client_id).keyboard_enter_serial();
+    activate_target(&mut fixture, &target, Some(serial));
+
+    assert_eq!(target_state(&mut fixture, &target), (false, true));
+}
+
+#[test]
 fn focus_disabled_marks_valid_activation_urgent_by_default() {
     let (mut fixture, target) = mapped_target_with_focused_peer(
         r#"
@@ -142,6 +203,44 @@ fn urgency_disabled_window_remains_directly_focusable() {
         .focus()
         .map(|mapped| mapped.window.clone());
     assert_eq!(focused_window, Some(target.window));
+}
+
+fn window_opens_focused(config: &str, credentials_unknown: bool) -> bool {
+    let mut fixture = Fixture::with_config(Config::parse_mem(config).unwrap());
+    fixture.add_output(1, (1920, 1080));
+
+    let client_id = if credentials_unknown {
+        fixture.add_client_with_unknown_credentials()
+    } else {
+        fixture.add_client()
+    };
+    map_window(&mut fixture, client_id);
+    let source_window = fixture
+        .niri()
+        .layout
+        .windows()
+        .next()
+        .unwrap()
+        .1
+        .window
+        .clone();
+
+    let target = fixture.client(client_id).create_window();
+    let target_surface = target.surface.clone();
+    target.set_title("target");
+    target.commit();
+    fixture.roundtrip(client_id);
+    map_existing_window(&mut fixture, client_id, &target_surface);
+
+    let is_focused = fixture
+        .niri()
+        .layout
+        .windows()
+        .find(|(_, mapped)| mapped.window != source_window)
+        .unwrap()
+        .1
+        .is_focused();
+    is_focused
 }
 
 fn mapped_target_with_focused_peer(config: &str) -> (Fixture, MappedTarget) {

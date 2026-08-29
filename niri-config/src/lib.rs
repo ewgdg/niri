@@ -1733,6 +1733,7 @@ mod tests {
                                 ),
                             ),
                             title: None,
+                            client_env: None,
                             is_active: None,
                             is_focused: None,
                             is_active_in_column: None,
@@ -1752,6 +1753,7 @@ mod tests {
                                     ),
                                 ),
                             ),
+                            client_env: None,
                             is_active: None,
                             is_focused: None,
                             is_active_in_column: None,
@@ -1763,6 +1765,7 @@ mod tests {
                         Match {
                             app_id: None,
                             title: None,
+                            client_env: None,
                             is_active: Some(
                                 true,
                             ),

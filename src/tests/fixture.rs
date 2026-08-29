@@ -96,11 +96,19 @@ impl Fixture {
     }
 
     pub fn add_client(&mut self) -> ClientId {
+        self.add_client_inner(false)
+    }
+
+    pub fn add_client_with_unknown_credentials(&mut self) -> ClientId {
+        self.add_client_inner(true)
+    }
+
+    fn add_client_inner(&mut self, credentials_unknown: bool) -> ClientId {
         let (sock1, sock2) = UnixStream::pair().unwrap();
         self.niri().insert_client(NewClient {
             client: sock1,
             restricted: false,
-            credentials_unknown: false,
+            credentials_unknown,
         });
 
         let client = Client::new(sock2);

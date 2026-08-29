@@ -36,6 +36,9 @@ use wayland_backend::server::Credentials;
 use crate::handlers::KdeDecorationsModeState;
 use crate::niri::ClientState;
 
+mod client_environment;
+pub use client_environment::ClientEnvironment;
+
 pub mod id;
 pub mod region;
 pub mod scale;
@@ -479,6 +482,26 @@ pub fn get_credentials_for_surface(surface: &WlSurface) -> Option<Credentials> {
 
     let client = dh.get_client(surface.id()).ok()?;
     get_credentials_for_client(&dh, &client)
+}
+
+pub fn client_environment_matches(
+    surface: &WlSurface,
+    pattern: &niri_config::utils::RegexEq,
+) -> bool {
+    let Some(handle) = surface.handle().upgrade() else {
+        return false;
+    };
+    let dh = DisplayHandle::from(handle);
+    let Ok(client) = dh.get_client(surface.id()) else {
+        return false;
+    };
+    let Some(data) = client.get_data::<ClientState>() else {
+        return false;
+    };
+
+    data.client_environment
+        .as_ref()
+        .is_some_and(|environment| environment.matches(pattern))
 }
 
 pub fn get_credentials_for_client(dh: &DisplayHandle, client: &Client) -> Option<Credentials> {
