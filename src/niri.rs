@@ -35,7 +35,7 @@ use smithay::backend::renderer::element::{
 };
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::sync::SyncPoint;
-use smithay::backend::renderer::Color32F;
+use smithay::backend::renderer::{Color32F, Renderer};
 use smithay::desktop::utils::{
     bbox_from_surface_tree, output_update, send_dmabuf_feedback_surface_tree,
     send_frames_surface_tree, surface_presentation_feedback_flags_from_states,
@@ -5493,6 +5493,15 @@ impl Niri {
             .and_then(|state| state.virtual_output_damage_tracker.as_mut())
             .expect("virtual output must have a presentation damage tracker");
         let (_, states) = damage_tracker.damage_output(1, &elements).unwrap();
+
+        // This path imports surface textures without creating a renderer Frame, so Smithay cannot
+        // run its usual end-of-frame cleanup. Drop the elements first, then explicitly drain the
+        // deferred GL resource queue to prevent one texture import from accumulating per commit.
+        drop(elements);
+        if let Err(err) = renderer.cleanup_texture_cache() {
+            warn!(?err, "error cleaning up virtual output renderer resources");
+        }
+
         states
     }
 
