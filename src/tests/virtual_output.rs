@@ -160,6 +160,84 @@ fn virtual_output_custom_mode_does_not_accumulate_modes() {
 }
 
 #[test]
+fn off_virtual_output_can_be_removed() {
+    let mut f = Fixture::new();
+
+    let name = {
+        let state = f.niri_state();
+        state
+            .backend
+            .create_virtual_output(&mut state.niri, 1920, 1080, 60, Some("virt".to_owned()))
+            .unwrap()
+    };
+
+    f.niri_state()
+        .apply_transient_output_config(&name, niri_ipc::OutputAction::Off);
+
+    {
+        let state = f.niri_state();
+        state
+            .backend
+            .remove_virtual_output(&mut state.niri, &name)
+            .unwrap();
+    }
+
+    let state = f.niri_state();
+    assert!(state
+        .backend
+        .remove_virtual_output(&mut state.niri, &name)
+        .is_err());
+}
+
+#[test]
+fn configured_virtual_output_cannot_be_removed_at_runtime() {
+    let mut f = Fixture::new();
+    let name = "virt";
+
+    {
+        let state = f.niri_state();
+        state.modify_output_config(name, |config| config.create_virtual = true);
+        state.reload_output_config();
+    }
+
+    let result = {
+        let state = f.niri_state();
+        state.backend.remove_virtual_output(&mut state.niri, name)
+    };
+
+    assert!(result.is_err_and(|err| err.contains("is configured")));
+    assert!(f
+        .niri_state()
+        .backend
+        .ipc_outputs()
+        .lock()
+        .unwrap()
+        .values()
+        .any(|output| output.name == name));
+}
+
+#[test]
+fn virtual_output_name_is_reported_as_its_model() {
+    let mut f = Fixture::new();
+    let name = {
+        let state = f.niri_state();
+        state
+            .backend
+            .create_virtual_output(&mut state.niri, 1920, 1080, 60, Some("sunshine".to_owned()))
+            .unwrap()
+    };
+
+    let ipc_outputs = f.niri_state().backend.ipc_outputs();
+    let ipc_outputs = ipc_outputs.lock().unwrap();
+    let output = ipc_outputs
+        .values()
+        .find(|output| output.name == name)
+        .unwrap();
+
+    assert_eq!(output.model, name);
+}
+
+#[test]
 fn touch_input_targets_virtual_output_when_focused() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));

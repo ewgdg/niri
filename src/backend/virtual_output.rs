@@ -75,7 +75,8 @@ pub(super) fn build_headless_virtual_output(
 
     let connector = name.unwrap_or_else(|| format!("HEADLESS-{n}"));
     let make = "niri".to_string();
-    let model = "virtual".to_string();
+    // Portals commonly label outputs by make and model, so expose the useful connector name here.
+    let model = connector.clone();
     let serial = n.to_string();
 
     let output = Output::new(
@@ -147,12 +148,34 @@ pub(super) fn remove_virtual_output_from_map(
     name: &str,
     kind: &str,
 ) -> Result<(), String> {
+    let lookup_name = OutputName {
+        connector: name.to_owned(),
+        make: None,
+        model: None,
+        serial: None,
+    };
+
+    if niri
+        .config
+        .borrow()
+        .outputs
+        .find(&lookup_name)
+        .is_some_and(|output| output.create_virtual)
+    {
+        return Err(format!(
+            "output '{name}' is configured; remove it from the config or disable it there instead"
+        ));
+    }
+
     let (output, output_id) = outputs
         .remove(name)
         .ok_or_else(|| format!("{kind} '{name}' not found"))?;
 
     ipc_outputs.lock().unwrap().remove(&output_id);
-    niri.remove_output(&output);
+    // Powered-off virtual outputs remain backend-managed after niri disconnects them.
+    if niri.output_exists(&output) {
+        niri.remove_output(&output);
+    }
 
     Ok(())
 }
