@@ -58,7 +58,7 @@ fn client_environment_rule_applies_after_config_reload() {
         r#"
         window-rule {
             match client-env="^PATH="
-            focus-on-xdg-activate false
+            on-xdg-activate "set-urgent"
         }
         "#,
     )
@@ -73,105 +73,106 @@ fn client_environment_rule_applies_after_config_reload() {
 }
 
 #[test]
-fn focus_disabled_marks_valid_activation_urgent_by_default() {
-    let (mut fixture, target) = mapped_target_with_focused_peer(
-        r#"
-        window-rule {
-            focus-on-xdg-activate false
+fn mapped_activation_obeys_policy_and_serial() {
+    for (policy, valid, serialless) in [
+        (None, (true, false), (false, true)),
+        (Some("ignore"), (false, false), (false, false)),
+        (Some("set-urgent"), (false, true), (false, true)),
+        (Some("focus"), (true, false), (true, false)),
+    ] {
+        let config = activation_config(policy);
+        for (with_serial, expected) in [(true, valid), (false, serialless)] {
+            let (mut fixture, target) = mapped_target_with_focused_peer(&config);
+            let serial =
+                with_serial.then(|| fixture.client(target.client_id).keyboard_enter_serial());
+
+            activate_target(&mut fixture, &target, serial);
+
+            assert_eq!(
+                target_state(&mut fixture, &target),
+                expected,
+                "policy {policy:?}, with_serial {with_serial}",
+            );
         }
-        "#,
-    );
-    let serial = fixture.client(target.client_id).keyboard_enter_serial();
-
-    activate_target(&mut fixture, &target, Some(serial));
-
-    assert_eq!(target_state(&mut fixture, &target), (false, true));
+    }
 }
 
 #[test]
-fn urgency_disabled_ignores_focus_fallback() {
-    let (mut fixture, target) = mapped_target_with_focused_peer(
-        r#"
-        window-rule {
-            focus-on-xdg-activate false
-            urgent-on-xdg-activate false
-        }
-        "#,
-    );
-    let serial = fixture.client(target.client_id).keyboard_enter_serial();
+fn explicit_policy_does_not_accept_invalid_serial() {
+    for policy in ["ignore", "set-urgent", "focus"] {
+        let (mut fixture, target) =
+            mapped_target_with_focused_peer(&activation_config(Some(policy)));
 
-    activate_target(&mut fixture, &target, Some(serial));
+        activate_target(&mut fixture, &target, Some(0));
 
-    assert_eq!(target_state(&mut fixture, &target), (false, false));
+        assert_eq!(
+            target_state(&mut fixture, &target),
+            (false, false),
+            "{policy}"
+        );
+    }
 }
 
 #[test]
-fn urgency_disabled_ignores_accepted_invalid_activation() {
-    let (mut fixture, target) = mapped_target_with_focused_peer(
-        r#"
-        debug {
-            honor-xdg-activation-with-invalid-serial
-        }
-        window-rule {
-            focus-on-xdg-activate false
-            urgent-on-xdg-activate false
-        }
-        "#,
-    );
+fn explicit_policy_applies_to_accepted_invalid_serial() {
+    for (policy, expected) in [
+        ("ignore", (false, false)),
+        ("set-urgent", (false, true)),
+        ("focus", (true, false)),
+    ] {
+        let config = format!(
+            "debug {{ honor-xdg-activation-with-invalid-serial; }}\n{}",
+            activation_config(Some(policy)),
+        );
+        let (mut fixture, target) = mapped_target_with_focused_peer(&config);
 
-    activate_target(&mut fixture, &target, Some(0));
+        activate_target(&mut fixture, &target, Some(0));
 
-    assert_eq!(target_state(&mut fixture, &target), (false, false));
+        assert_eq!(target_state(&mut fixture, &target), expected, "{policy}");
+    }
 }
 
 #[test]
-fn urgency_disabled_ignores_serialless_activation() {
-    let (mut fixture, target) = mapped_target_with_focused_peer(
-        r#"
-        window-rule {
-            urgent-on-xdg-activate false
+fn activation_before_mapping_obeys_policy_and_serial() {
+    for (policy, valid, serialless) in [
+        (None, (true, false), (false, true)),
+        (Some("ignore"), (false, false), (false, false)),
+        (Some("set-urgent"), (false, true), (false, true)),
+        (Some("focus"), (true, false), (true, false)),
+    ] {
+        // Isolate activation requests from ordinary new-window focus decisions.
+        let config = format!(
+            "debug {{ strict-new-window-focus-policy; }}\n{}",
+            activation_config(policy),
+        );
+        for (with_serial, expected) in [(true, valid), (false, serialless)] {
+            assert_eq!(
+                target_state_after_activation_before_mapping(&config, with_serial),
+                expected,
+                "policy {policy:?}, with_serial {with_serial}",
+            );
         }
-        "#,
-    );
-
-    activate_target(&mut fixture, &target, None);
-
-    assert_eq!(target_state(&mut fixture, &target), (false, false));
+    }
 }
 
 #[test]
-fn urgency_disabled_does_not_block_valid_activation() {
-    let (mut fixture, target) = mapped_target_with_focused_peer(
-        r#"
-        window-rule {
-            urgent-on-xdg-activate false
-        }
-        "#,
-    );
-    let serial = fixture.client(target.client_id).keyboard_enter_serial();
-
-    activate_target(&mut fixture, &target, Some(serial));
-
-    assert_eq!(target_state(&mut fixture, &target), (true, false));
-}
-
-#[test]
-fn urgency_disabled_ignores_serialless_activation_before_mapping() {
+fn open_focused_overrides_activation_focus_before_mapping() {
     assert_eq!(
         target_state_after_activation_before_mapping(
             r#"
             window-rule {
                 open-focused false
-                urgent-on-xdg-activate false
+                on-xdg-activate "focus"
             }
             "#,
+            false,
         ),
-        (false, false)
+        (false, false),
     );
 }
 
 #[test]
-fn serialless_activation_before_mapping_is_urgent_by_default() {
+fn serialless_activation_before_mapping_is_urgent_with_open_focused_false() {
     assert_eq!(
         target_state_after_activation_before_mapping(
             r#"
@@ -179,21 +180,15 @@ fn serialless_activation_before_mapping_is_urgent_by_default() {
                 open-focused false
             }
             "#,
+            false,
         ),
-        (false, true)
+        (false, true),
     );
 }
 
 #[test]
-fn urgency_disabled_window_remains_directly_focusable() {
-    let (mut fixture, target) = mapped_target_with_focused_peer(
-        r#"
-        window-rule {
-            focus-on-xdg-activate false
-            urgent-on-xdg-activate false
-        }
-        "#,
-    );
+fn ignored_activation_window_remains_directly_focusable() {
+    let (mut fixture, target) = mapped_target_with_focused_peer(&activation_config(Some("ignore")));
 
     fixture.niri().layout.activate_window(&target.window);
 
@@ -203,6 +198,12 @@ fn urgency_disabled_window_remains_directly_focusable() {
         .focus()
         .map(|mapped| mapped.window.clone());
     assert_eq!(focused_window, Some(target.window));
+}
+
+fn activation_config(policy: Option<&str>) -> String {
+    policy
+        .map(|policy| format!("window-rule {{ on-xdg-activate \"{policy}\"; }}"))
+        .unwrap_or_default()
 }
 
 fn window_opens_focused(config: &str, credentials_unknown: bool) -> bool {
@@ -270,7 +271,7 @@ fn mapped_target_with_focused_peer(config: &str) -> (Fixture, MappedTarget) {
     )
 }
 
-fn target_state_after_activation_before_mapping(config: &str) -> (bool, bool) {
+fn target_state_after_activation_before_mapping(config: &str, with_serial: bool) -> (bool, bool) {
     let mut fixture = Fixture::with_config(Config::parse_mem(config).unwrap());
     fixture.add_output(1, (1920, 1080));
 
@@ -286,12 +287,18 @@ fn target_state_after_activation_before_mapping(config: &str) -> (bool, bool) {
         .window
         .clone();
 
+    // Strict new-window focus leaves the source unfocused; establish actual input focus
+    // so valid-serial cases exercise a token supported by a keyboard enter event.
+    fixture.niri().layout.activate_window(&source_window);
+    fixture.double_roundtrip(client_id);
+
     let target = fixture.client(client_id).create_window();
     let target_surface = target.surface.clone();
     target.commit();
     fixture.roundtrip(client_id);
 
-    let token_result = fixture.client(client_id).request_activation_token(None);
+    let serial = with_serial.then(|| fixture.client(client_id).keyboard_enter_serial());
+    let token_result = fixture.client(client_id).request_activation_token(serial);
     fixture.roundtrip(client_id);
     let token = token_result.lock().unwrap().take().unwrap();
     fixture.client(client_id).activate(token, &target_surface);

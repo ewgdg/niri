@@ -37,9 +37,7 @@ pub struct WindowRule {
     #[knuffel(child, unwrap(argument))]
     pub hidden: Option<bool>,
     #[knuffel(child, unwrap(argument))]
-    pub focus_on_xdg_activate: Option<bool>,
-    #[knuffel(child, unwrap(argument))]
-    pub urgent_on_xdg_activate: Option<bool>,
+    pub on_xdg_activate: Option<OnXdgActivate>,
 
     // Rules applied dynamically.
     #[knuffel(child, unwrap(argument))]
@@ -155,6 +153,13 @@ pub struct FloatingPosition {
     pub y: FloatOrInt<-65535, 65535>,
     #[knuffel(property, default)]
     pub relative_to: RelativeTo,
+}
+
+#[derive(knuffel::DecodeScalar, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnXdgActivate {
+    Ignore,
+    SetUrgent,
+    Focus,
 }
 
 #[derive(knuffel::DecodeScalar, Debug, Default, Clone, Copy, PartialEq, Eq)]

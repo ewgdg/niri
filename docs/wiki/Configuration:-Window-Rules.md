@@ -59,8 +59,7 @@ window-rule {
     default-column-display "tabbed"
     default-floating-position x=100 y=200 relative-to="bottom-left"
     scroll-factor 0.75
-    focus-on-xdg-activate true
-    urgent-on-xdg-activate true
+    on-xdg-activate "focus"
 
     focus-ring {
         // off
@@ -219,7 +218,7 @@ window-rule {
     match client-env="^PI_CODING_AGENT=true$"
 
     open-focused false
-    focus-on-xdg-activate false
+    on-xdg-activate "set-urgent"
 }
 ```
 
@@ -647,13 +646,23 @@ window-rule {
 > This is because window title (and app ID) are not double-buffered in the Wayland protocol, so they are not tied to specific window contents.
 > There's no robust way for Firefox to synchronize visibly showing a different tab and changing the window title.
 
-#### `focus-on-xdg-activate`
+#### `on-xdg-activate`
 
 <sup>Since: next release</sup>
 
-Set this to `false` to prevent the window from receiving focus for an accepted XDG activation
-request. The window will be marked as urgent instead unless [`urgent-on-xdg-activate`](#urgent-on-xdg-activate)
-is also set to `false`.
+Set what niri does when a window requests activation through [xdg-activation](https://wayland.app/protocols/xdg-activation-v1).
+
+Values:
+
+- `"ignore"`: do nothing: neither focus the window nor mark it urgent.
+- `"set-urgent"`: always mark the window urgent instead of focusing it.
+- `"focus"`: always focus the window, even for activation requests without a serial.
+
+The default behavior, when this rule is unset, picks between focusing and marking the window urgent based on the serial that the application provides when creating the activation token.
+Requests with a valid serial focus the target window, and requests without a serial mark it urgent.
+
+Requests with a set, but invalid, serial, are always ignored, which you can change with the [`honor-xdg-activation-with-invalid-serial`](https://niri-wm.github.io/niri/Configuration%3A-Debug-Options.html#honor-xdg-activation-with-invalid-serial) debug flag.
+
 This is useful for apps that steal focus on incoming messages or when opening popup windows like Picture-in-Picture.
 
 ```kdl
@@ -662,26 +671,33 @@ window-rule {
     match title="^Picture-in-Picture$"
 
     open-floating true
-    focus-on-xdg-activate false
+    on-xdg-activate "set-urgent"
 }
 ```
 
-#### `urgent-on-xdg-activate`
+The former `focus-on-xdg-activate` and `urgent-on-xdg-activate` settings have been removed.
+Migrate existing rules as follows:
 
-Set this to `false` to ignore XDG activation requests that would mark the window urgent.
-This includes urgency-only requests and requests prevented from focusing the window by
-[`focus-on-xdg-activate false`](#focus-on-xdg-activate).
+| Former settings | Replacement |
+| --- | --- |
+| Focus `false`, urgency unset or `true` | `on-xdg-activate "set-urgent"` |
+| Both `false` | `on-xdg-activate "ignore"` |
+| Both unset or `true` | Leave `on-xdg-activate` unset |
 
-This property does not clear an existing urgent state or affect direct focus through pointer input,
-keyboard navigation, or compositor actions.
+There is no equivalent for allowing valid-serial focus while ignoring serialless requests.
+Explicit `"focus"` also focuses serialless requests.
+
+This property does not clear existing urgency or affect direct focus through pointer input,
+keyboard navigation, or compositor actions. It also applies to activation requests received before
+mapping; ordinary initial focus remains controlled by [`open-focused`](#open-focused).
 
 ```kdl
 // Do not let an automation browser take focus or request attention.
 window-rule {
     match app-id="^automation-browser$"
 
-    focus-on-xdg-activate false
-    urgent-on-xdg-activate false
+    open-focused false
+    on-xdg-activate "ignore"
 }
 ```
 

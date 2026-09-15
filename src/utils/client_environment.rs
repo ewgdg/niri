@@ -1,8 +1,5 @@
-use std::fmt;
-use std::fs;
-use std::io;
 use std::os::unix::net::UnixStream;
-use std::str;
+use std::{fmt, fs, io, str};
 
 use niri_config::utils::RegexEq;
 use smithay::reexports::rustix;

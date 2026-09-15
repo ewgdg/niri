@@ -1,7 +1,7 @@
 use std::cmp::{max, min};
 
 use niri_config::utils::MergeWith as _;
-use niri_config::window_rule::{Match, WindowRule};
+use niri_config::window_rule::{Match, OnXdgActivate, WindowRule};
 use niri_config::{
     BackgroundEffect, BlockOutFrom, BorderRule, CornerRadius, FloatingPosition, PresetSize,
     ResolvedPopupsRules, ShadowRule, TabIndicatorRule,
@@ -116,11 +116,8 @@ pub struct ResolvedWindowRules {
     /// focused, or otherwise visible to the user.
     pub hidden: bool,
 
-    /// Whether accepted XDG activation requests should focus the window.
-    pub focus_on_xdg_activate: Option<bool>,
-
-    /// Whether XDG activation requests that do not focus the window should mark it urgent.
-    pub urgent_on_xdg_activate: Option<bool>,
+    /// What to do on xdg-activation requests.
+    pub on_xdg_activate: Option<OnXdgActivate>,
 
     /// Extra bound on the minimum window width.
     pub min_width: Option<u16>,
@@ -313,12 +310,8 @@ impl ResolvedWindowRules {
                     resolved.hidden = x;
                 }
 
-                if let Some(x) = rule.focus_on_xdg_activate {
-                    resolved.focus_on_xdg_activate = Some(x);
-                }
-
-                if let Some(x) = rule.urgent_on_xdg_activate {
-                    resolved.urgent_on_xdg_activate = Some(x);
+                if let Some(x) = rule.on_xdg_activate {
+                    resolved.on_xdg_activate = Some(x);
                 }
 
                 if let Some(x) = rule.min_width {

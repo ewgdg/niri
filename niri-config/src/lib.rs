@@ -60,7 +60,7 @@ pub use crate::recent_windows::{MruDirection, MruFilter, MruPreviews, MruScope, 
 pub use crate::utils::FloatOrInt;
 use crate::utils::{Flag, MergeWith as _};
 pub use crate::window_rule::{
-    FloatingPosition, PopupsRule, RelativeTo, ResolvedPopupsRules, WindowRule,
+    FloatingPosition, OnXdgActivate, PopupsRule, RelativeTo, ResolvedPopupsRules, WindowRule,
 };
 pub use crate::workspace::{Workspace, WorkspaceLayoutPart};
 
@@ -656,6 +656,30 @@ mod tests {
     }
 
     #[test]
+    fn parse_on_xdg_activate() {
+        let parsed = do_parse(
+            r#"
+            window-rule { on-xdg-activate "ignore"; }
+            window-rule { on-xdg-activate "set-urgent"; }
+            window-rule { on-xdg-activate "focus"; }
+            "#,
+        );
+
+        assert_eq!(
+            parsed
+                .window_rules
+                .iter()
+                .map(|rule| rule.on_xdg_activate)
+                .collect::<Vec<_>>(),
+            vec![
+                Some(OnXdgActivate::Ignore),
+                Some(OnXdgActivate::SetUrgent),
+                Some(OnXdgActivate::Focus),
+            ]
+        );
+    }
+
+    #[test]
     fn parse() {
         let parsed = do_parse(
             r##"
@@ -891,6 +915,7 @@ mod tests {
                 default-window-height { fixed 500; }
                 default-column-display "tabbed"
                 default-floating-position x=100 y=-200 relative-to="bottom-left"
+                on-xdg-activate "ignore"
 
                 focus-ring {
                     off
@@ -1807,8 +1832,9 @@ mod tests {
                         true,
                     ),
                     hidden: None,
-                    focus_on_xdg_activate: None,
-                    urgent_on_xdg_activate: None,
+                    on_xdg_activate: Some(
+                        Ignore,
+                    ),
                     min_width: None,
                     min_height: None,
                     max_width: None,
@@ -2271,6 +2297,7 @@ mod tests {
                     "/dev/dri/renderD130",
                 ],
                 force_pipewire_invalid_modifier: false,
+                disable_pipewire_dmabuf: false,
                 emulate_zero_presentation_time: false,
                 disable_resize_throttling: false,
                 disable_transactions: false,

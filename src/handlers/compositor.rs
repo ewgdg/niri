@@ -176,13 +176,8 @@ impl CompositorHandler for State {
                     let token = activation_token_data
                         .as_ref()
                         .filter(|token| token.timestamp.elapsed() < XDG_ACTIVATION_TOKEN_TIMEOUT);
-                    let activation_action = token.map(|token| {
-                        xdg_activation_action(
-                            token,
-                            rules.focus_on_xdg_activate,
-                            rules.urgent_on_xdg_activate,
-                        )
-                    });
+                    let activation_action =
+                        token.map(|token| xdg_activation_action(token, rules.on_xdg_activate));
                     let mark_urgent = activation_action == Some(XdgActivationAction::Urgent);
                     let activate = rules.open_focused.map(|focus| {
                         if focus {

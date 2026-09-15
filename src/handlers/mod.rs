@@ -1,6 +1,7 @@
 pub mod background_effect;
 mod compositor;
 mod dmabuf_readiness;
+pub mod image_copy_capture;
 mod layer_shell;
 mod xdg_shell;
 
@@ -41,7 +42,7 @@ use smithay::wayland::keyboard_shortcuts_inhibit::{
 };
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::pointer_constraints::{
-    with_pointer_constraint, PointerConstraint, PointerConstraintsHandler,
+    with_pointer_constraint, ConstraintRemove, PointerConstraintsHandler,
 };
 use smithay::wayland::security_context::{
     SecurityContext, SecurityContextHandler, SecurityContextListenerSource,
@@ -210,7 +211,7 @@ impl PointerConstraintsHandler for State {
         &mut self,
         _surface: &WlSurface,
         pointer: &PointerHandle<Self>,
-        _constraint: Option<&PointerConstraint>,
+        reason: ConstraintRemove,
     ) {
         // Since a pointer constraint is broken when a surface loses pointer focus, and one surface
         // can only have a single pointer constraint at once, assume there can be only one
@@ -223,11 +224,7 @@ impl PointerConstraintsHandler for State {
 
         // If the constraint was broken by the pointer forcibly leaving the surface (e.g. the user
         // opened the overview), then it doesn't make much sense to warp it.
-        //
-        // Furthermore, when the constraint is removed as part of the pointer leaving the surface,
-        // this call happens with locked pointer data, and calling set_location() will try to lock
-        // it again and deadlock.
-        if pointer.last_enter().is_none() {
+        if matches!(reason, ConstraintRemove::PointerLeave(_)) {
             return;
         }
 
@@ -805,16 +802,16 @@ pub(super) enum XdgActivationAction {
 
 pub(super) fn xdg_activation_action(
     token_data: &XdgActivationTokenData,
-    focus_on_xdg_activate: Option<bool>,
-    urgent_on_xdg_activate: Option<bool>,
+    on_xdg_activate: Option<niri_config::OnXdgActivate>,
 ) -> XdgActivationAction {
-    let urgency_only = token_data.user_data.get::<UrgentOnlyMarker>().is_some();
-    if !urgency_only && focus_on_xdg_activate != Some(false) {
-        XdgActivationAction::Activate
-    } else if urgent_on_xdg_activate != Some(false) {
-        XdgActivationAction::Urgent
-    } else {
-        XdgActivationAction::Ignore
+    match on_xdg_activate {
+        Some(niri_config::OnXdgActivate::Ignore) => XdgActivationAction::Ignore,
+        Some(niri_config::OnXdgActivate::SetUrgent) => XdgActivationAction::Urgent,
+        Some(niri_config::OnXdgActivate::Focus) => XdgActivationAction::Activate,
+        None if token_data.user_data.get::<UrgentOnlyMarker>().is_some() => {
+            XdgActivationAction::Urgent
+        }
+        None => XdgActivationAction::Activate,
     }
 }
 
@@ -873,11 +870,7 @@ impl XdgActivationHandler for State {
             if let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(&surface) {
                 let window = mapped.window.clone();
                 let rules = mapped.rules();
-                let action = xdg_activation_action(
-                    &token_data,
-                    rules.focus_on_xdg_activate,
-                    rules.urgent_on_xdg_activate,
-                );
+                let action = xdg_activation_action(&token_data, rules.on_xdg_activate);
 
                 match action {
                     XdgActivationAction::Activate => {

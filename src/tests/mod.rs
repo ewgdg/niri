@@ -14,5 +14,6 @@ mod remove_output;
 mod screencopy;
 mod transactions;
 mod virtual_output;
+mod virtual_pointer;
 mod window_opening;
 mod xdg_activation;
